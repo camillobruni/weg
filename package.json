@@ -1,0 +1,24 @@
+{
+  "name": "weg",
+  "version": "1.0.0",
+  "description": "GPS Analysis Tool",
+  "main": "src/app.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc && node build.js",
+    "dev": "node build.js --watch",
+    "check": "tsc --noEmit",
+    "format": "prettier --write 'src/**/*.ts' './*.js'"
+  },
+  "dependencies": {
+    "leaflet": "1.9.4",
+    "uplot": "1.6.32",
+    "fit-file-parser": "2.3.3"
+  },
+  "devDependencies": {
+    "esbuild": "0.20.2",
+    "typescript": "5.9.3",
+    "prettier": "3.8.1",
+    "@types/leaflet": "1.9.21"
+  }
+}

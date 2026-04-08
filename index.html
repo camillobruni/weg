@@ -3,26 +3,30 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Strasse — GPS Analysis</title>
+  <title>Weg — GPS Analysis</title>
 
-  <!-- Leaflet -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link rel="stylesheet" href="dist/styles.css">
 
-  <!-- uPlot (fast time-series charts) -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css">
-  <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
-
-  <!-- FIT file parser -->
-  <script type="module">
-    import FitParser from 'https://esm.sh/fit-file-parser@2.3.3';
-    window.EasyFit = FitParser;
+  <script type="importmap">
+    {
+      "imports": {
+        "leaflet": "./dist/leaflet.mjs",
+        "uplot": "./dist/uplot.mjs",
+        "fit-file-parser": "./dist/fit-file-parser.mjs"
+      }
+    }
   </script>
-
-  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div id="app">
+    <div id="global-loader" class="hidden">
+      <div class="spinner"></div>
+      <div id="loader-text">Importing tracks...</div>
+      <div id="loader-subtext"></div>
+      <div id="loader-progress-wrap">
+        <div id="loader-progress-bar"></div>
+      </div>
+    </div>
 
     <!-- ── Sidebar ── -->
     <aside id="sidebar">
@@ -30,29 +34,106 @@
         <div class="logo">
           <span class="logo-icon material-symbols-rounded">terrain</span>
           <div>
-            <div class="logo-title">Strasse</div>
+            <div class="logo-title">Weg</div>
             <div class="logo-sub">GPS Analysis</div>
           </div>
         </div>
       </div>
 
-      <input type="file" id="file-input" multiple accept=".gpx,.fit,.tcx,.kml" hidden>
-      <input type="file" id="folder-input" webkitdirectory multiple hidden>
-      <div id="drop-zone" class="drop-idle">
+      <div id="drop-zone" class="drop-idle" style="cursor: pointer;">
         <div class="drop-icon material-symbols-rounded">download</div>
-        <div class="drop-primary">Drop files or folders here</div>
-        <div class="drop-formats">GPX · FIT · TCX · KML</div>
-        <div class="drop-actions">
-          <button class="drop-btn" id="browse-files-btn">Files</button>
-          <button class="drop-btn" id="browse-folder-btn">Folder</button>
+        <div class="drop-primary">Drop GPS files here</div>
+        <div class="drop-formats">
+          <span class="badge">GPX</span>
+          <span class="badge">FIT</span>
+          <span class="badge">TCX</span>
+          <span class="badge">KML</span>
+        </div>
+        <div class="drop-browse-container">
+          <label class="drop-browse">
+            or browse files
+            <input type="file" id="file-input" multiple accept=".gpx,.fit,.tcx,.kml" hidden>
+          </label>
+          <span class="drop-separator">·</span>
+          <label class="drop-browse" id="folder-label" for="folder-input">
+            folders
+            <input type="file" id="folder-input" webkitdirectory directory hidden>
+          </label>
         </div>
       </div>
 
       <div id="track-list-header">
         <span class="section-label">Tracks</span>
         <div class="header-actions">
+          <button id="btn-toggle-filters" title="Filter tracks" class="icon-btn"><span class="material-symbols-rounded">filter_alt</span></button>
           <button id="btn-fit-all" title="Fit all tracks on map" class="icon-btn"><span class="material-symbols-rounded">zoom_out_map</span></button>
           <button id="btn-clear-all" title="Remove all tracks" class="icon-btn danger"><span class="material-symbols-rounded">delete</span></button>
+        </div>
+      </div>
+
+      <div id="track-controls">
+        <div class="search-bar">
+          <span class="material-symbols-rounded search-icon">search</span>
+          <input type="text" id="track-search" placeholder="Search tracks...">
+          <button id="btn-regex-toggle" class="icon-btn mini" title="Use Regular Expression">.*</button>
+        </div>
+        <div class="sort-ctrl">
+          <label>Sort:</label>
+          <button id="btn-sort-menu" class="sort-select-btn">
+            <span id="sort-current-icon" class="material-symbols-rounded">calendar_today</span>
+            <span id="sort-current-label">Date</span>
+            <span class="material-symbols-rounded arrow">expand_more</span>
+          </button>
+        </div>
+      </div>
+
+      <div id="filter-panel" class="hidden">
+        <div class="filter-group">
+          <label><span class="material-symbols-rounded">calendar_month</span>Date Range</label>
+          <div class="filter-row">
+            <input type="date" id="filter-date-start">
+            <span>to</span>
+            <input type="date" id="filter-date-end">
+          </div>
+        </div>
+        <div class="filter-group">
+          <label><span class="material-symbols-rounded">route</span>Distance (km)</label>
+          <div class="filter-row">
+            <input type="number" id="filter-dist-min" placeholder="Min" min="0" step="1">
+            <span>–</span>
+            <input type="number" id="filter-dist-max" placeholder="Max" min="0" step="1">
+          </div>
+        </div>
+        <div class="filter-group">
+          <label><span class="material-symbols-rounded">schedule</span>Duration (h)</label>
+          <div class="filter-row">
+            <input type="number" id="filter-dur-min" placeholder="Min" min="0" step="0.5">
+            <span>–</span>
+            <input type="number" id="filter-dur-max" placeholder="Max" min="0" step="0.5">
+          </div>
+        </div>
+        <div class="filter-group">
+          <label><span class="material-symbols-rounded">label</span>Tags</label>
+          <div class="filter-row">
+            <input type="text" id="filter-tags" placeholder="e.g. race, commute" style="flex:1">
+          </div>
+        </div>
+        <div class="filter-group">
+          <label><span class="material-symbols-rounded">query_stats</span>Has Metrics</label>
+          <div id="filter-metrics" class="filter-metrics-grid">
+            <button class="mini-pill" data-metric="power" title="Power"><span class="material-symbols-rounded">bolt</span></button>
+            <button class="mini-pill" data-metric="hr" title="Heart Rate"><span class="material-symbols-rounded">favorite</span></button>
+            <button class="mini-pill" data-metric="cadence" title="Cadence"><span class="material-symbols-rounded">directions_run</span></button>
+            <button class="mini-pill" data-metric="temperature" title="Temperature"><span class="material-symbols-rounded">thermostat</span></button>
+            <button class="mini-pill" data-metric="battery" title="Battery"><span class="material-symbols-rounded">battery_full</span></button>
+            <button class="mini-pill" data-metric="gearRear" title="Rear Gear"><span class="material-symbols-rounded">settings</span></button>
+            <button class="mini-pill" data-metric="gearFront" title="Front Gear"><span class="material-symbols-rounded">settings_input_component</span></button>
+          </div>
+        </div>
+        <div class="filter-footer">
+          <button id="btn-reset-filters" class="icon-btn" title="Reset Filters">
+            <span class="material-symbols-rounded">filter_alt_off</span>
+          </button>
         </div>
       </div>
 
@@ -60,6 +141,8 @@
         <div id="track-list-empty">No tracks loaded yet</div>
       </div>
     </aside>
+
+    <div id="sidebar-resizer"></div>
 
     <!-- ── Main ── -->
     <div id="main">
@@ -71,7 +154,6 @@
         <div id="map-controls">
           <div id="basemap-switcher">
             <button class="bm-btn active" data-layer="swisstopo">Swisstopo</button>
-            <button class="bm-btn" data-layer="swisstopo-gray">Topo Gray</button>
             <button class="bm-btn" data-layer="opentopomap">Topo</button>
             <button class="bm-btn" data-layer="osm">OSM</button>
             <button class="bm-btn" data-layer="satellite">Satellite</button>
@@ -90,79 +172,119 @@
       <div id="chart-panel">
         <div id="tab-nav">
           <button class="tab-btn active" data-tab="graphs">Analysis</button>
+          <button class="tab-btn" data-tab="insights">Insights</button>
           <button class="tab-btn" data-tab="details">Details</button>
         </div>
 
         <div id="tab-graphs" class="tab-content active">
           <div id="chart-toolbar">
+            <button id="btn-metric-menu" class="icon-btn" title="Select metrics to display">
+              <span class="material-symbols-rounded">bar_chart</span>
+              <span class="btn-label">Graphs</span>
+              <span class="material-symbols-rounded">expand_more</span>
+            </button>
             <div id="metric-pills">
-              <button class="metric-pill active" data-metric="elevation"   style="--pill-color:#4ECDC4">Elevation</button>
-              <button class="metric-pill active" data-metric="speed"       style="--pill-color:#45B7D1">Speed</button>
-              <button class="metric-pill"        data-metric="gradient"    style="--pill-color:#A8C8A0">Gradient</button>
-              <button class="metric-pill"        data-metric="power"       style="--pill-color:#F7DC6F">Power</button>
-              <button class="metric-pill"        data-metric="hr"          style="--pill-color:#FF6B6B">Heart Rate</button>
-              <button class="metric-pill"        data-metric="cadence"     style="--pill-color:#BB8FCE">Cadence</button>
-              <button class="metric-pill"        data-metric="temperature" style="--pill-color:#F8C471">Temp</button>
+              <button class="metric-pill active" data-metric="elevation" style="--pill-color:#4ECDC4" title="Toggle Elevation graph" draggable="true">
+                <span class="material-symbols-rounded">height</span>Elevation
+              </button>
+              <button class="metric-pill active" data-metric="speed"     style="--pill-color:#45B7D1" title="Toggle Speed graph" draggable="true">
+                <span class="material-symbols-rounded">speed</span>Speed
+              </button>
+              <button class="metric-pill"        data-metric="gradient"  style="--pill-color:#A8C8A0" title="Toggle Gradient graph" draggable="true">
+                <span class="material-symbols-rounded">trending_up</span>Gradient
+              </button>
+              <button class="metric-pill"        data-metric="power"     style="--pill-color:#F7DC6F" title="Toggle Power graph" draggable="true">
+                <span class="material-symbols-rounded">bolt</span>Power
+              </button>
+              <button class="metric-pill"        data-metric="hr"        style="--pill-color:#FF6B6B" title="Toggle Heart Rate graph" draggable="true">
+                <span class="material-symbols-rounded">favorite</span>Heart Rate
+              </button>
+              <button class="metric-pill"        data-metric="cadence"   style="--pill-color:#BB8FCE" title="Toggle Cadence graph" draggable="true">
+                <span class="material-symbols-rounded">directions_run</span>Cadence
+              </button>
+              <button class="metric-pill"        data-metric="temperature" style="--pill-color:#F8C471" title="Toggle Temperature graph" draggable="true">
+                <span class="material-symbols-rounded">thermostat</span>Temp
+              </button>
+              <button class="metric-pill"        data-metric="battery"     style="--pill-color:#45B7D1" title="Toggle Battery graph" draggable="true">
+                <span class="material-symbols-rounded">battery_full</span>Battery
+              </button>
+              <button class="metric-pill"        data-metric="gearRear"    style="--pill-color:#82E0AA" title="Toggle Rear Gear graph" draggable="true">
+                <span class="material-symbols-rounded">settings</span>Rear Gear
+              </button>
+              <button class="metric-pill"        data-metric="gearFront"   style="--pill-color:#A8C8A0" title="Toggle Front Gear graph" draggable="true">
+                <span class="material-symbols-rounded">settings_input_component</span>Front Gear
+              </button>
             </div>
             <div id="chart-options">
-              <div class="seg-ctrl" id="x-axis-ctrl">
-                <button class="seg-btn active" data-axis="distance"><span class="material-symbols-rounded">map</span>Dist</button>
-                <button class="seg-btn" data-axis="time"><span class="material-symbols-rounded">schedule</span>Time</button>
+              <div id="x-axis-ctrl" class="seg-ctrl">
+                <button class="seg-btn" data-axis="distance" title="Switch X-axis to Distance"><span class="material-symbols-rounded">route</span>Distance</button>
+                <button class="seg-btn active" data-axis="time" title="Switch X-axis to Time"><span class="material-symbols-rounded">schedule</span>Time</button>
               </div>
-              <button id="btn-reset-selection" class="icon-btn" title="Cancel selection"><span class="material-symbols-rounded">fit_width</span></button>
-              <button id="btn-reset-zoom" class="icon-btn" title="Reset zoom"><span class="material-symbols-rounded">refresh</span></button>
-              <button id="btn-stats-panel" class="icon-btn active" title="Toggle statistics"><span class="material-symbols-rounded">bar_chart</span></button>
+              <button id="btn-follow-dot" class="icon-btn" title="Toggle Follow Point on Map"><span class="material-symbols-rounded">my_location</span></button>
+              <button id="btn-reset-zoom" class="icon-btn" title="Reset Zoom and Clear Selection"><span class="material-symbols-rounded">restart_alt</span></button>
             </div>
           </div>
 
-          <!-- Stats table: Total row + Selection row share column widths via CSS grid -->
-          <div id="chart-stats-wrap">
-            <div id="chart-stats" class="hidden stats-row">
-              <span class="stats-row-label">Total</span>
-              <span class="stat" id="stat-distance"> <span class="stat-label">Distance</span>  <span class="stat-value">—</span></span>
-              <span class="stat" id="stat-duration">  <span class="stat-label">Time</span>      <span class="stat-value">—</span></span>
-              <span class="stat" id="stat-elevation"> <span class="stat-label">Elev+</span>     <span class="stat-value">—</span></span>
-              <span class="stat" id="stat-avg-speed"> <span class="stat-label">Avg Speed</span><span class="stat-value">—</span></span>
-              <span class="stat" id="stat-avg-power"> <span class="stat-label">Avg Power</span><span class="stat-value">—</span></span>
-              <span class="stat" id="stat-avg-hr">    <span class="stat-label">Avg HR</span>   <span class="stat-value">—</span></span>
-            </div>
-            <div id="chart-stats-sel" class="hidden stats-row sel-row">
-              <span class="stats-row-label sel-label">
-                Selection
-                <button id="sel-cancel-btn" title="Cancel selection" class="material-symbols-rounded">close</button>
-              </span>
-              <span class="stat" id="sel-distance"> <span class="stat-label">Distance</span>  <span class="stat-value">—</span></span>
-              <span class="stat" id="sel-duration">  <span class="stat-label">Time</span>      <span class="stat-value">—</span></span>
-              <span class="stat" id="sel-elevation"> <span class="stat-label">Elev+</span>     <span class="stat-value">—</span></span>
-              <span class="stat" id="sel-avg-speed"> <span class="stat-label">Avg Speed</span><span class="stat-value">—</span></span>
-              <span class="stat" id="sel-avg-power"> <span class="stat-label">Avg Power</span><span class="stat-value">—</span></span>
-              <span class="stat" id="sel-avg-hr">    <span class="stat-label">Avg HR</span>   <span class="stat-value">—</span></span>
+          <div id="chart-stats" class="hidden">
+            <div id="chart-stats-wrap">
+              <!-- Row: Total -->
+              <div id="chart-stats-total" class="stats-row">
+                <div class="stats-row-label">Total</div>
+                <div class="stats-cell" id="stat-distance" title="Total Distance"><span class="stat-label">Dist</span><span class="stat-value">--</span></div>
+                <div class="stats-cell" id="stat-duration" title="Total Duration"><span class="stat-label">Time</span><span class="stat-value">--</span></div>
+                <div class="stats-cell" id="stat-elevation" title="Total Elevation Gain"><span class="stat-label">Elev</span><span class="stat-value">--</span></div>
+                <div class="stats-cell" id="stat-avg-speed" title="Average Speed"><span class="stat-label">Avg Spd</span><span class="stat-value">--</span></div>
+                <div class="stats-cell" id="stat-avg-power" title="Average Power"><span class="stat-label">Avg Pwr</span><span class="stat-value">--</span></div>
+                <div class="stats-cell" id="stat-avg-hr" title="Average Heart Rate"><span class="stat-label">Avg HR</span><span class="stat-value">--</span></div>
+              </div>
+              <!-- Row: Selection -->
+              <div id="chart-stats-sel" class="stats-row sel-row hidden">
+                <div class="stats-row-label sel-label">
+                  Sel <button id="sel-cancel-btn" class="icon-btn danger" title="Clear selection and reset range"><span class="material-symbols-rounded">close</span></button>
+                </div>
+                <div class="stats-cell" id="sel-distance" title="Selection Distance"><span class="stat-label">Dist</span><span class="stat-value">--</span></div>
+                <div class="stats-cell" id="sel-duration" title="Selection Duration"><span class="stat-label">Time</span><span class="stat-value">--</span></div>
+                <div class="stats-cell" id="sel-elevation" title="Selection Elevation Gain"><span class="stat-label">Elev</span><span class="stat-value">--</span></div>
+                <div class="stats-cell" id="sel-avg-speed" title="Selection Average Speed"><span class="stat-label">Avg Spd</span><span class="stat-value">--</span></div>
+                <div class="stats-cell" id="sel-avg-power" title="Selection Average Power"><span class="stat-label">Avg Pwr</span><span class="stat-value">--</span></div>
+                <div class="stats-cell" id="sel-avg-hr" title="Selection Average Heart Rate"><span class="stat-label">Avg HR</span><span class="stat-value">--</span></div>
+              </div>
             </div>
           </div>
 
           <div id="charts-container">
-            <div id="chart-empty">Select a track to view analysis</div>
+            <div id="chart-empty" class="empty-state">
+              <span class="material-symbols-rounded empty-icon">no_sim</span>
+              <div class="empty-text">Select a track to view analysis</div>
+            </div>
+          </div>
+        </div>
+
+        <div id="tab-insights" class="tab-content">
+          <div id="insights-view">
+            <div id="insights-empty" class="empty-state">
+              <span class="material-symbols-rounded empty-icon">no_sim</span>
+              <div class="empty-text">Select a track for insights</div>
+            </div>
           </div>
         </div>
 
         <div id="tab-details" class="tab-content">
-          <div id="details-content">
-            <div class="details-empty">Select a track to view details</div>
+          <div id="details-view">
+            <div id="details-empty" class="empty-state">
+              <span class="material-symbols-rounded empty-icon">no_sim</span>
+              <div class="empty-text">Select a track for details</div>
+            </div>
           </div>
         </div>
       </div>
     </div>
   </div>
 
+  <div id="toast-container"></div>
   <div id="hist-tooltip"></div>
   <div id="hist-line"></div>
-  <div id="toast-container"></div>
 
-  <script src="js/storage.js"></script>
-  <script src="js/url-state.js"></script>
-  <script src="js/parsers.js"></script>
-  <script src="js/charts.js"></script>
-  <script src="js/map.js"></script>
-  <script src="js/app.js"></script>
+  <script src="dist/weg.mjs" type="module"></script>
 </body>
 </html>
