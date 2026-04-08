@@ -33,7 +33,7 @@ async function build() {
   if (watch) {
     await Promise.all([ctxWeg.watch(), ctxVendor.watch()]);
     console.log('Watching for changes...');
-    
+
     // Simple dev server
     const { host, port } = await ctxWeg.serve({
       servedir: '.',
@@ -47,7 +47,7 @@ async function build() {
   }
 }
 
-build().catch(err => {
+build().catch((err) => {
   console.error(err);
   process.exit(1);
 });

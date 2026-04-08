@@ -6,7 +6,7 @@ import { TrackData } from './parsers';
 // Saves/Loads track data locally in the browser.
 
 export const Storage = (() => {
-  const DB_NAME    = 'weg-gps-db';
+  const DB_NAME = 'weg-gps-db';
   const STORE_NAME = 'tracks';
   const DB_VERSION = 1;
 
@@ -20,7 +20,7 @@ export const Storage = (() => {
         }
       };
       req.onsuccess = () => resolve(req.result);
-      req.onerror   = () => reject(req.error);
+      req.onerror = () => reject(req.error);
     });
   }
 
@@ -30,17 +30,17 @@ export const Storage = (() => {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       tx.objectStore(STORE_NAME).put(track);
       tx.oncomplete = () => resolve(track.id);
-      tx.onerror    = () => reject(tx.error);
+      tx.onerror = () => reject(tx.error);
     });
   }
 
   async function getAll(): Promise<TrackData[]> {
     const db = await openDB();
     return new Promise((resolve, reject) => {
-      const tx  = db.transaction(STORE_NAME, 'readonly');
+      const tx = db.transaction(STORE_NAME, 'readonly');
       const req = tx.objectStore(STORE_NAME).getAll();
       req.onsuccess = () => resolve(req.result);
-      req.onerror   = () => reject(req.error);
+      req.onerror = () => reject(req.error);
     });
   }
 
@@ -50,7 +50,7 @@ export const Storage = (() => {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       tx.objectStore(STORE_NAME).delete(id);
       tx.oncomplete = () => resolve();
-      tx.onerror    = () => reject(tx.error);
+      tx.onerror = () => reject(tx.error);
     });
   }
 
@@ -60,7 +60,7 @@ export const Storage = (() => {
       const tx = db.transaction(STORE_NAME, 'readwrite');
       tx.objectStore(STORE_NAME).clear();
       tx.oncomplete = () => resolve();
-      tx.onerror    = () => reject(tx.error);
+      tx.onerror = () => reject(tx.error);
     });
   }
 

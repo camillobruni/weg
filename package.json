@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "build": "node build.js",
-    "dev": "node build.js --watch"
+    "dev": "node build.js --watch",
+    "format": "prettier --write 'src/**/*.ts' './*.js'"
   },
   "dependencies": {
     "leaflet": "^1.9.4",
@@ -14,9 +15,9 @@
     "fit-file-parser": "^2.3.3"
   },
   "devDependencies": {
-    "esbuild": "^0.20.2",
-    "typescript": "^5.4.3",
-    "@types/leaflet": "^1.9.8",
-    "@types/uplot": "^1.6.2"
+    "esbuild": "latest",
+    "typescript": "latest",
+    "prettier": "latest",
+    "@types/leaflet": "^1.9.8"
   }
 }

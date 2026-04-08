@@ -7,8 +7,8 @@ import { TrackData, TrackPoint } from './parsers';
 
 export const MapView = (() => {
   let map: L.Map, cursorMarker: L.Marker, highlightLine: L.FeatureGroup | null;
-  let polylines: Record<string, L.FeatureGroup> = {};      // id → L.FeatureGroup
-  let trackData: Record<string, TrackData> = {};      // id → TrackData
+  let polylines: Record<string, L.FeatureGroup> = {}; // id → L.FeatureGroup
+  let trackData: Record<string, TrackData> = {}; // id → TrackData
   let selectedId: string | null = null;
   let selectedOutline: L.Polyline | null = null;
 
@@ -21,10 +21,13 @@ export const MapView = (() => {
 
   // Tile layers
   const LAYERS: Record<string, L.TileLayer> = {
-    swisstopo: L.tileLayer('https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-farbe/default/current/3857/{z}/{x}/{y}.jpeg', {
-      attribution: '&copy; swisstopo',
-      maxZoom: 18,
-    }),
+    swisstopo: L.tileLayer(
+      'https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-farbe/default/current/3857/{z}/{x}/{y}.jpeg',
+      {
+        attribution: '&copy; swisstopo',
+        maxZoom: 18,
+      },
+    ),
     opentopomap: L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenTopoMap contributors',
       maxZoom: 17,
@@ -32,16 +35,19 @@ export const MapView = (() => {
     osm: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors',
     }),
-    satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-      attribution: '&copy; Esri',
-    }),
+    satellite: L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      {
+        attribution: '&copy; Esri',
+      },
+    ),
   };
 
   function init(
     onSelect: (id: string) => void,
     onMove: (lat: number, lng: number, zoom: number) => void,
     onPointClick: (id: string, idx: number) => void,
-    onDblClick: () => void
+    onDblClick: () => void,
   ) {
     onSelectCb = onSelect;
     onMoveCb = onMove;
@@ -79,7 +85,7 @@ export const MapView = (() => {
 
   function switchBasemap(key: string) {
     if (!LAYERS[key]) return;
-    Object.values(LAYERS).forEach(l => map.removeLayer(l));
+    Object.values(LAYERS).forEach((l) => map.removeLayer(l));
     map.addLayer(LAYERS[key]);
   }
 
@@ -87,23 +93,36 @@ export const MapView = (() => {
     trackData[track.id] = track;
     const pts = track.points;
     const layers: L.Polyline[] = [];
-    
+
     let currentSegment: [number, number][] = [];
     for (let i = 0; i < pts.length; i++) {
       const p = pts[i];
       if (i > 0) {
-        const prev = pts[i-1];
-        const dt = (p.time && prev.time) ? p.time - prev.time : 0;
-        
+        const prev = pts[i - 1];
+        const dt = p.time && prev.time ? p.time - prev.time : 0;
+
         if (dt > GAP_THRESHOLD) {
           // Finish current segment
           if (currentSegment.length > 1) {
-            layers.push(L.polyline(currentSegment, { color: track.color, weight: 3, opacity: 0.2 }));
+            layers.push(
+              L.polyline(currentSegment, { color: track.color, weight: 3, opacity: 0.2 }),
+            );
           }
           // Draw dotted line for gap
-          layers.push(L.polyline([[prev.lat, prev.lon], [p.lat, p.lon]], {
-            color: track.color, weight: 2, opacity: 0.15, dashArray: '5, 8'
-          }));
+          layers.push(
+            L.polyline(
+              [
+                [prev.lat, prev.lon],
+                [p.lat, p.lon],
+              ],
+              {
+                color: track.color,
+                weight: 2,
+                opacity: 0.15,
+                dashArray: '5, 8',
+              },
+            ),
+          );
           currentSegment = [];
         }
       }
@@ -137,7 +156,7 @@ export const MapView = (() => {
     const pl = polylines[id];
     if (!pl) return;
     if (visible) map.addLayer(pl);
-    else         map.removeLayer(pl);
+    else map.removeLayer(pl);
     if (selectedId === id) _syncOutline();
   }
 
@@ -154,19 +173,19 @@ export const MapView = (() => {
     const pl = polylines[selectedId!];
     const track = trackData[selectedId!];
     if (selectedId && pl && track && map.hasLayer(pl)) {
-      const latlngs = track.points.map(p => [p.lat, p.lon] as [number, number]);
+      const latlngs = track.points.map((p) => [p.lat, p.lon] as [number, number]);
       selectedOutline = L.polyline(latlngs, {
         color: '#000000',
         weight: 7,
         opacity: 0.65,
         interactive: false,
       }).addTo(map);
-      
+
       // Ensure outline is behind the actual colored line
       selectedOutline.bringToFront();
       pl.bringToFront();
     }
-    
+
     // Ensure segment highlight stays on top of both
     if (highlightLine && map.hasLayer(highlightLine)) {
       highlightLine.bringToFront();
@@ -174,7 +193,7 @@ export const MapView = (() => {
   }
 
   function fitAll() {
-    const all = Object.values(polylines).filter(pl => map.hasLayer(pl));
+    const all = Object.values(polylines).filter((pl) => map.hasLayer(pl));
     if (!all.length) return;
     const group = L.featureGroup(all);
     map.fitBounds(group.getBounds().pad(0.05));
@@ -192,16 +211,23 @@ export const MapView = (() => {
 
   // ── Chart-selection highlight segment ────────────────────────
   // pts: full points array, iMin/iMax: indices of visible range
-  function highlightSegment(id: string, pts: TrackPoint[], iMin: number, iMax: number, fit = false, colors: string[] | null = null) {
+  function highlightSegment(
+    id: string,
+    pts: TrackPoint[],
+    iMin: number,
+    iMax: number,
+    fit = false,
+    colors: string[] | null = null,
+  ) {
     clearHighlight();
     if (!pts || iMin >= iMax) return;
-    const latlngs = pts.slice(iMin, iMax + 1).map(p => [p.lat, p.lon] as [number, number]);
+    const latlngs = pts.slice(iMin, iMax + 1).map((p) => [p.lat, p.lon] as [number, number]);
     if (latlngs.length < 2) return;
 
     if (fit) fitSegment(latlngs);
 
     const trackColor = trackData[id]?.color || '#fff';
-    
+
     // Triple layer for maximum pronunciation: Black -> White -> Color
     const bgBlack = L.polyline(latlngs, {
       color: '#000000',
@@ -209,33 +235,39 @@ export const MapView = (() => {
       opacity: 0.5,
       interactive: false,
     });
-    
+
     const bgWhite = L.polyline(latlngs, {
       color: '#ffffff',
       weight: 9,
       opacity: 0.9,
       interactive: false,
     });
-    
+
     // Inner segments: handle both metric coloring and gaps
     const innerSegs: L.Polyline[] = [];
     for (let i = iMin + 1; i <= iMax; i++) {
-      const p0 = pts[i-1], p1 = pts[i];
-      const dt = (p1.time && p0.time) ? p1.time - p0.time : 0;
-      
-      const c = (colors && colors[i]) ? colors[i] : trackColor;
+      const p0 = pts[i - 1],
+        p1 = pts[i];
+      const dt = p1.time && p0.time ? p1.time - p0.time : 0;
+
+      const c = colors && colors[i] ? colors[i] : trackColor;
       const isGap = dt > GAP_THRESHOLD;
-      
-      innerSegs.push(L.polyline(
-        [[p0.lat, p0.lon], [p1.lat, p1.lon]],
-        {
-          color: isGap ? '#888896' : c,
-          weight: 6,
-          opacity: 1,
-          dashArray: isGap ? '4, 6' : undefined,
-          interactive: false
-        }
-      ));
+
+      innerSegs.push(
+        L.polyline(
+          [
+            [p0.lat, p0.lon],
+            [p1.lat, p1.lon],
+          ],
+          {
+            color: isGap ? '#888896' : c,
+            weight: 6,
+            opacity: 1,
+            dashArray: isGap ? '4, 6' : undefined,
+            interactive: false,
+          },
+        ),
+      );
     }
     const inner = L.featureGroup(innerSegs);
 
@@ -253,8 +285,11 @@ export const MapView = (() => {
       iconAnchor: [10, 10],
     });
 
-    const mStart = L.marker([pts[iMin].lat, pts[iMin].lon], { icon: startIcon, interactive: false });
-    const mEnd   = L.marker([pts[iMax].lat, pts[iMax].lon], { icon: endIcon, interactive: false });
+    const mStart = L.marker([pts[iMin].lat, pts[iMin].lon], {
+      icon: startIcon,
+      interactive: false,
+    });
+    const mEnd = L.marker([pts[iMax].lat, pts[iMax].lon], { icon: endIcon, interactive: false });
 
     // Group them on the highlightLine variable for easy removal
     highlightLine = L.featureGroup([bgBlack, bgWhite, inner, mStart, mEnd]).addTo(map);
@@ -309,20 +344,30 @@ export const MapView = (() => {
 
     const segs: L.Polyline[] = [];
     for (let i = 1; i < pts.length; i++) {
-      if (!pts[i-1] || !pts[i]) continue;
-      const dt = (pts[i].time && pts[i-1].time) ? pts[i].time - pts[i-1].time : 0;
-      const c = colors[i] || colors[i-1] || '#888896';
-      
+      if (!pts[i - 1] || !pts[i]) continue;
+      const dt = pts[i].time && pts[i - 1].time ? pts[i].time - pts[i - 1].time : 0;
+      const c = colors[i] || colors[i - 1] || '#888896';
+
       if (dt > GAP_THRESHOLD) {
-        segs.push(L.polyline(
-          [[pts[i-1].lat, pts[i-1].lon], [pts[i].lat, pts[i].lon]],
-          { color: '#888896', weight: 2, opacity: 0.5, dashArray: '4, 6', interactive: false }
-        ));
+        segs.push(
+          L.polyline(
+            [
+              [pts[i - 1].lat, pts[i - 1].lon],
+              [pts[i].lat, pts[i].lon],
+            ],
+            { color: '#888896', weight: 2, opacity: 0.5, dashArray: '4, 6', interactive: false },
+          ),
+        );
       } else {
-        segs.push(L.polyline(
-          [[pts[i-1].lat, pts[i-1].lon], [pts[i].lat, pts[i].lon]],
-          { color: c, weight: 4, opacity: 0.9, interactive: false }
-        ));
+        segs.push(
+          L.polyline(
+            [
+              [pts[i - 1].lat, pts[i - 1].lon],
+              [pts[i].lat, pts[i].lon],
+            ],
+            { color: c, weight: 4, opacity: 0.9, interactive: false },
+          ),
+        );
       }
     }
     const group = L.featureGroup(segs).addTo(map);
@@ -348,12 +393,13 @@ export const MapView = (() => {
 
   // ── Utils ─────────────────────────────────────────────────────
   function haversine(lat1: number, lon1: number, lat2: number, lon2: number) {
-    const R  = 6371000;
-    const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180;
-    const Δφ = (lat2 - lat1) * Math.PI / 180;
-    const Δλ = (lon2 - lon1) * Math.PI / 180;
-    const a  = Math.sin(Δφ/2)**2 + Math.cos(φ1)*Math.cos(φ2)*Math.sin(Δλ/2)**2;
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    const R = 6371000;
+    const φ1 = (lat1 * Math.PI) / 180,
+      φ2 = (lat2 * Math.PI) / 180;
+    const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+    const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+    const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 
   return {
