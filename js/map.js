@@ -8,6 +8,8 @@ const MapView = (() => {
   let trackData = {};      // id → track
   let selectedId = null;
   let selectedOutline = null;
+  let metricColorLayer = null;   // featureGroup of colored segments
+  let metricColorId    = null;   // track id currently colored by metric
   let onSelectCb     = null;
   let onPointClickCb = null;
 
@@ -97,7 +99,7 @@ const MapView = (() => {
     const pl = L.polyline(latlngs, {
       color: track.color,
       weight: 3,
-      opacity: 0.85,
+      opacity: 0.2,
     });
     pl.addTo(map);
     pl.on('click', e => {
@@ -107,7 +109,43 @@ const MapView = (() => {
     polylines[track.id] = pl;
   }
 
+  function colorTrackByMetric(id, pts, colors) {
+    clearMetricColor();
+    if (!pts || !colors || !pts.length) return;
+    metricColorId = id;
+
+    const segs = [];
+    for (let i = 1; i < pts.length; i++) {
+      if (!pts[i-1] || !pts[i]) continue;
+      const c = colors[i] || colors[i-1] || '#888896';
+      segs.push(L.polyline(
+        [[pts[i-1].lat, pts[i-1].lon], [pts[i].lat, pts[i].lon]],
+        { color: c, weight: 4, opacity: 0.9, interactive: false }
+      ));
+    }
+    metricColorLayer = L.featureGroup(segs).addTo(map);
+
+    // Hide the regular polyline so only colored segments show
+    if (polylines[id]) polylines[id].setStyle({ opacity: 0 });
+
+    // Ensure ordering: outline behind, metric layer on top
+    if (selectedOutline) selectedOutline.bringToFront();
+    metricColorLayer.bringToFront();
+    if (highlightLine && map.hasLayer(highlightLine)) highlightLine.bringToFront();
+  }
+
+  function clearMetricColor() {
+    if (metricColorLayer) { map.removeLayer(metricColorLayer); metricColorLayer = null; }
+    const id = metricColorId;
+    metricColorId = null;
+    if (id && polylines[id]) {
+      const isSelected = id === selectedId;
+      polylines[id].setStyle({ opacity: isSelected ? 0.4 : 0.15 });
+    }
+  }
+
   function removeTrack(id) {
+    if (id === metricColorId) clearMetricColor();
     if (polylines[id]) { map.removeLayer(polylines[id]); delete polylines[id]; }
     delete trackData[id];
     if (id === selectedId) {
@@ -132,18 +170,23 @@ const MapView = (() => {
 
   function setSelectedTrack(id) {
     selectedId = id;
-    
+
     // Raise selected, dim others
     Object.entries(polylines).forEach(([pid, pl]) => {
       if (pid === id) {
-        pl.setStyle({ weight: 4, opacity: 1 });
+        pl.setStyle({ weight: 5, opacity: 0.4 });
         pl.bringToFront();
       } else {
-        pl.setStyle({ weight: 2, opacity: 0.45 });
+        pl.setStyle({ weight: 3, opacity: 0.15 });
       }
     });
-
     _syncOutline();
+
+    // Keep metric-colored track's polyline hidden; bring metric layer to front
+    if (metricColorId && polylines[metricColorId]) {
+      polylines[metricColorId].setStyle({ opacity: 0 });
+    }
+    if (metricColorLayer) metricColorLayer.bringToFront();
   }
 
   // Manage the black outline for the selected track
@@ -170,7 +213,6 @@ const MapView = (() => {
     // Ensure segment highlight stays on top of both
     if (highlightLine && map.hasLayer(highlightLine)) {
       highlightLine.bringToFront();
-      if (highlightLine._innerLine) highlightLine._innerLine.bringToFront();
     }
   }
 
@@ -202,31 +244,53 @@ const MapView = (() => {
     if (fit) fitSegment(latlngs);
 
     const trackColor = trackData[id]?.color || '#fff';
-    highlightLine = L.polyline(latlngs, {
-      color: '#ffffff',
-      weight: 5,
-      opacity: 0.9,
-      dashArray: null,
-      className: 'highlight-segment',
+    
+    // Triple layer for maximum pronunciation: Black -> White -> Color (increased thickness)
+    const bgBlack = L.polyline(latlngs, {
+      color: '#000000',
+      weight: 14,
+      opacity: 0.5,
+      interactive: false,
     });
-    // Draw a coloured inner line on top
+    
+    const bgWhite = L.polyline(latlngs, {
+      color: '#ffffff',
+      weight: 9,
+      opacity: 0.9,
+      interactive: false,
+    });
+    
     const inner = L.polyline(latlngs, {
       color: trackColor,
-      weight: 3,
+      weight: 5,
       opacity: 1,
+      interactive: false,
     });
-    // Group them so we can remove both
-    highlightLine._innerLine = inner;
-    highlightLine.addTo(map);
-    inner.addTo(map);
+
+    // Start/End markers (Monochrome)
+    const startIcon = L.divIcon({
+      className: 'sel-marker-start',
+      html: `<span class="material-symbols-rounded" style="color:#fff; font-size:20px; font-variation-settings:'FILL' 1; filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 2px #000)">play_circle</span>`,
+      iconSize: [20, 20],
+      iconAnchor: [10, 10],
+    });
+    const endIcon = L.divIcon({
+      className: 'sel-marker-end',
+      html: `<span class="material-symbols-rounded" style="color:#fff; font-size:20px; font-variation-settings:'FILL' 1; filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 2px #000)">stop_circle</span>`,
+      iconSize: [20, 20],
+      iconAnchor: [10, 10],
+    });
+
+    const mStart = L.marker(latlngs[0], { icon: startIcon, interactive: false });
+    const mEnd   = L.marker(latlngs[latlngs.length - 1], { icon: endIcon, interactive: false });
+
+    // Group them on the highlightLine variable for easy removal
+    highlightLine = L.featureGroup([bgBlack, bgWhite, inner, mStart, mEnd]).addTo(map);
   }
 
   function clearHighlight() {
     if (highlightLine) {
-      if (map.hasLayer(highlightLine)) map.removeLayer(highlightLine);
-      if (highlightLine._innerLine && map.hasLayer(highlightLine._innerLine)) {
-        map.removeLayer(highlightLine._innerLine);
-      }
+      map.removeLayer(highlightLine);
       highlightLine = null;
     }
   }
@@ -349,5 +413,7 @@ const MapView = (() => {
     invalidateSize,
     getPosition,
     setPosition,
+    colorTrackByMetric,
+    clearMetricColor,
   };
 })();

@@ -74,6 +74,7 @@
           <div id="basemap-switcher">
             <button class="bm-btn active" data-layer="swisstopo">Swisstopo</button>
             <button class="bm-btn" data-layer="swisstopo-gray">Topo Gray</button>
+            <button class="bm-btn" data-layer="opentopomap">Topo</button>
             <button class="bm-btn" data-layer="osm">OSM</button>
             <button class="bm-btn" data-layer="satellite">Satellite</button>
           </div>
@@ -103,6 +104,9 @@
               <button class="metric-pill active" data-metric="speed"     style="--pill-color:#45B7D1">
                 <span class="material-symbols-rounded">speed</span>Speed
               </button>
+              <button class="metric-pill"        data-metric="gradient"  style="--pill-color:#A8C8A0">
+                <span class="material-symbols-rounded">trending_up</span>Gradient
+              </button>
               <button class="metric-pill"        data-metric="power"     style="--pill-color:#F7DC6F">
                 <span class="material-symbols-rounded">bolt</span>Power
               </button>
@@ -117,37 +121,38 @@
               </button>
             </div>
             <div id="chart-options">
-              <div class="seg-ctrl" id="x-axis-ctrl">
-                <button class="seg-btn active" data-axis="distance"><span class="material-symbols-rounded">map</span>Dist</button>
+              <div id="x-axis-ctrl" class="seg-ctrl">
+                <button class="seg-btn active" data-axis="distance"><span class="material-symbols-rounded">route</span>Distance</button>
                 <button class="seg-btn" data-axis="time"><span class="material-symbols-rounded">schedule</span>Time</button>
               </div>
-              <button id="btn-reset-selection" class="icon-btn" title="Cancel selection"><span class="material-symbols-rounded">fit_width</span></button>
-              <button id="btn-reset-zoom" class="icon-btn" title="Reset zoom"><span class="material-symbols-rounded">refresh</span></button>
+              <button id="btn-reset-zoom" class="icon-btn" title="Reset Zoom"><span class="material-symbols-rounded">restart_alt</span></button>
             </div>
           </div>
 
-          <!-- Stats table: Total row + Selection row share column widths via CSS grid -->
-          <div id="chart-stats-wrap">
-            <div id="chart-stats" class="hidden stats-row">
-              <span class="stats-row-label">Total</span>
-              <span class="stat" id="stat-distance"> <span class="stat-label">Distance</span>  <span class="stat-value">—</span></span>
-              <span class="stat" id="stat-duration">  <span class="stat-label">Time</span>      <span class="stat-value">—</span></span>
-              <span class="stat" id="stat-elevation"> <span class="stat-label">Elev+</span>     <span class="stat-value">—</span></span>
-              <span class="stat" id="stat-avg-speed"> <span class="stat-label">Avg Speed</span><span class="stat-value">—</span></span>
-              <span class="stat" id="stat-avg-power"> <span class="stat-label">Avg Power</span><span class="stat-value">—</span></span>
-              <span class="stat" id="stat-avg-hr">    <span class="stat-label">Avg HR</span>   <span class="stat-value">—</span></span>
-            </div>
-            <div id="chart-stats-sel" class="hidden stats-row sel-row">
-              <span class="stats-row-label sel-label">
-                Selection
-                <button id="sel-cancel-btn" title="Cancel selection" class="material-symbols-rounded">close</button>
-              </span>
-              <span class="stat" id="sel-distance"> <span class="stat-label">Distance</span>  <span class="stat-value">—</span></span>
-              <span class="stat" id="sel-duration">  <span class="stat-label">Time</span>      <span class="stat-value">—</span></span>
-              <span class="stat" id="sel-elevation"> <span class="stat-label">Elev+</span>     <span class="stat-value">—</span></span>
-              <span class="stat" id="sel-avg-speed"> <span class="stat-label">Avg Speed</span><span class="stat-value">—</span></span>
-              <span class="stat" id="sel-avg-power"> <span class="stat-label">Avg Power</span><span class="stat-value">—</span></span>
-              <span class="stat" id="sel-avg-hr">    <span class="stat-label">Avg HR</span>   <span class="stat-value">—</span></span>
+          <div id="chart-stats" class="hidden">
+            <div id="chart-stats-wrap">
+              <!-- Row: Total -->
+              <div id="chart-stats-total" class="stats-row">
+                <div class="stats-row-label">Total</div>
+                <div class="stats-cell" data-metric="dist">--</div>
+                <div class="stats-cell" data-metric="time">--</div>
+                <div class="stats-cell" data-metric="moving">--</div>
+                <div class="stats-cell" data-metric="ele-gain">--</div>
+                <div class="stats-cell" data-metric="avg-speed">--</div>
+                <div class="stats-cell" data-metric="max-speed">--</div>
+              </div>
+              <!-- Row: Selection -->
+              <div id="chart-stats-sel" class="stats-row sel-row hidden">
+                <div class="stats-row-label sel-label">
+                  Sel <button id="btn-reset-selection" class="icon-btn danger hidden"><span class="material-symbols-rounded">close</span></button>
+                </div>
+                <div class="stats-cell" data-metric="dist">--</div>
+                <div class="stats-cell" data-metric="time">--</div>
+                <div class="stats-cell" data-metric="moving">--</div>
+                <div class="stats-cell" data-metric="ele-gain">--</div>
+                <div class="stats-cell" data-metric="avg-speed">--</div>
+                <div class="stats-cell" data-metric="max-speed">--</div>
+              </div>
             </div>
           </div>
 
@@ -157,8 +162,8 @@
         </div>
 
         <div id="tab-details" class="tab-content">
-          <div id="details-content">
-            <div class="details-empty">Select a track to view details</div>
+          <div id="details-view">
+            <div id="details-empty">Select a track for details</div>
           </div>
         </div>
       </div>
@@ -167,11 +172,12 @@
 
   <div id="toast-container"></div>
 
+  <!-- App scripts -->
   <script src="js/storage.js"></script>
   <script src="js/url-state.js"></script>
   <script src="js/parsers.js"></script>
-  <script src="js/charts.js"></script>
   <script src="js/map.js"></script>
+  <script src="js/charts.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

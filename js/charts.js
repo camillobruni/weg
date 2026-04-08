@@ -7,12 +7,13 @@ const ChartView = (() => {
 
   // ── Metric definitions ─────────────────────────────────────────
   const METRICS = {
-    elevation:   { label: 'Elevation',   icon: 'height',    unit: 'm',    color: '#4ECDC4', field: 'ele',   fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} m`,     fmtAxis: v => v.toFixed(0),  transform: null },
-    speed:       { label: 'Speed',       icon: 'speed',     unit: 'km/h', color: '#45B7D1', field: 'speed', fmt: (v, s) => s ? `${v.toFixed(1)}` : `${v.toFixed(1)} km/h`,  fmtAxis: v => v.toFixed(1),  transform: v => v * 3.6 },
-    power:       { label: 'Power',       icon: 'bolt',      unit: 'W',    color: '#F7DC6F', field: 'power', fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} W`,     fmtAxis: v => v.toFixed(0),  transform: null },
-    hr:          { label: 'Heart Rate',  icon: 'favorite',  unit: 'bpm',  color: '#FF6B6B', field: 'hr',    fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} bpm`,   fmtAxis: v => v.toFixed(0),  transform: null },
-    cadence:     { label: 'Cadence',     icon: 'directions_run', unit: 'rpm',  color: '#BB8FCE', field: 'cad',   fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} rpm`,   fmtAxis: v => v.toFixed(0),  transform: null },
-    temperature: { label: 'Temperature', icon: 'thermostat', unit: '°C',   color: '#F8C471', field: 'temp',  fmt: (v, s) => s ? `${v.toFixed(1)}` : `${v.toFixed(1)} °C`,    fmtAxis: v => v.toFixed(1),  transform: null },
+    elevation:   { label: 'Elevation',   icon: 'height',    unit: 'm',    color: '#4ECDC4', field: 'ele',      fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} m`,     fmtAxis: v => v.toFixed(0),  transform: null },
+    speed:       { label: 'Speed',       icon: 'speed',     unit: 'km/h', color: '#45B7D1', field: 'speed',    fmt: (v, s) => s ? `${v.toFixed(1)}` : `${v.toFixed(1)} km/h`,  fmtAxis: v => v.toFixed(1),  transform: v => v * 3.6 },
+    gradient:    { label: 'Gradient',    icon: 'trending_up', unit: '%',    color: '#A8C8A0', field: 'gradient', fmt: (v, s) => s ? `${v.toFixed(1)}` : `${v.toFixed(1)} %`,     fmtAxis: v => `${v.toFixed(0)}%`, transform: null, compute: (pts, fill) => fill(smoothGradient(pts, 20)) },
+    power:       { label: 'Power',       icon: 'bolt',      unit: 'W',    color: '#F7DC6F', field: 'power',    fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} W`,     fmtAxis: v => v.toFixed(0),  transform: null },
+    hr:          { label: 'Heart Rate',  icon: 'favorite',  unit: 'bpm',  color: '#FF6B6B', field: 'hr',       fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} bpm`,   fmtAxis: v => v.toFixed(0),  transform: null },
+    cadence:     { label: 'Cadence',     icon: 'directions_run', unit: 'rpm',  color: '#BB8FCE', field: 'cad',      fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} rpm`,   fmtAxis: v => v.toFixed(0),  transform: null },
+    temperature: { label: 'Temperature', icon: 'thermostat', unit: '°C',   color: '#F8C471', field: 'temp',     fmt: (v, s) => s ? `${v.toFixed(1)}` : `${v.toFixed(1)} °C`,    fmtAxis: v => v.toFixed(1),  transform: null },
   };
 
   // ── State ──────────────────────────────────────────────────────
@@ -35,17 +36,24 @@ const ChartView = (() => {
   let onRangeChangeCb = null;
   let onClickCb       = null;
 
+  const HIST_W      = 130;
+  const HIST_MARGIN = 10 + 55; // margin-left + margin-right on .hist-col
+  let statsVisible = true;
+  let histTooltipEl = null;
   let container, emptyEl, selStatsEl, resetSelBtn;
+  let mapColorMetric     = null;
+  let onMapColorChangeCb = null;
 
   // ── Init ──────────────────────────────────────────────────────
   function init(onCursorMove, onRangeChange, onClick) {
     onCursorMoveCb  = onCursorMove;
     onRangeChangeCb = onRangeChange;
     onClickCb       = onClick;
-    container = document.getElementById('charts-container');
-    emptyEl   = document.getElementById('chart-empty');
+    container     = document.getElementById('charts-container');
+    emptyEl       = document.getElementById('chart-empty');
     selStatsEl    = document.getElementById('chart-stats-sel');
     resetSelBtn   = document.getElementById('btn-reset-selection');
+    histTooltipEl = document.getElementById('hist-tooltip');
     syncKey = uPlot.sync('strasse-sync');
 
     document.getElementById('sel-cancel-btn')?.addEventListener('click', cancelSelection);
@@ -58,9 +66,13 @@ const ChartView = (() => {
     // Enable every metric that has at least one non-null data point in this file
     activeMetrics = new Set(
       Object.entries(METRICS)
-        .filter(([, def]) => track.points.some(p => p[def.field] != null))
+        .filter(([, def]) => def.compute
+          ? track.points.some(p => p[def.field] != null)
+          : track.points.some(p => p[def.field] != null))
         .map(([key]) => key)
     );
+    // Gradient is off by default (elevation already shows it)
+    activeMetrics.delete('gradient');
     // Sync the pill buttons in the toolbar
     document.querySelectorAll('.metric-pill').forEach(pill => {
       pill.classList.toggle('active', activeMetrics.has(pill.dataset.metric));
@@ -76,6 +88,8 @@ const ChartView = (() => {
     if (emptyEl) { emptyEl.style.display = 'flex'; emptyEl.textContent = 'Select a track to view analysis'; }
     document.getElementById('chart-stats').classList.add('hidden');
     clearSelectionStats();
+    mapColorMetric = null;
+    if (onMapColorChangeCb) onMapColorChangeCb(null);
   }
 
   function toggleMetric(key) {
@@ -86,6 +100,55 @@ const ChartView = (() => {
 
   function setXAxis(axis) { xAxis = axis; if (currentTrack) render(); }
 
+  function toggleStats() {
+    statsVisible = !statsVisible;
+    plots.forEach(({ histCol }) => histCol.classList.toggle('visible', statsVisible));
+    resize();
+  }
+
+  function setMapColorChangeCb(cb) { onMapColorChangeCb = cb; }
+
+  function toggleMapColor(key) {
+    if (mapColorMetric === key) {
+      mapColorMetric = null;
+      _updateMapColorBtns();
+      if (onMapColorChangeCb) onMapColorChangeCb(null);
+    } else {
+      mapColorMetric = key;
+      _updateMapColorBtns();
+      _fireMapColorCb();
+    }
+  }
+
+  function _updateMapColorBtns() {
+    document.querySelectorAll('.map-color-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.metric === mapColorMetric);
+    });
+  }
+
+  function _fireMapColorCb() {
+    if (!onMapColorChangeCb || !mapColorMetric || !currentTrack) return;
+    const plot = plots.find(p => p.metricKey === mapColorMetric);
+    if (!plot) return;
+    const colors = _computePointColors(mapColorMetric, plot.yData);
+    onMapColorChangeCb({ pts: currentTrack.points, colors });
+  }
+
+  function _computePointColors(key, yData) {
+    const vals = yData.filter(v => v != null && isFinite(v));
+    if (!vals.length) return yData.map(() => '#888896');
+    const min = Math.min(...vals), max = Math.max(...vals);
+    return yData.map(v => {
+      if (v == null || !isFinite(v)) return '#888896';
+      if (key === 'gradient') return gradientColor(v);
+      const t = max === min ? 0.5 : Math.max(0, Math.min(1, (v - min) / (max - min)));
+      if (t <= 0.25) return lerpHex('#4575b4', '#91bfdb', t / 0.25);
+      if (t <= 0.5)  return lerpHex('#91bfdb', '#fee090', (t - 0.25) / 0.25);
+      if (t <= 0.75) return lerpHex('#fee090', '#fc8d59', (t - 0.5)  / 0.25);
+      return              lerpHex('#fc8d59', '#d73027',  (t - 0.75) / 0.25);
+    });
+  }
+
   function resetZoom() {
     plots.forEach(({ uplot: u, xData }) => u.setScale('x', { min: xData[0], max: xData[xData.length-1] }));
   }
@@ -94,6 +157,7 @@ const ChartView = (() => {
     selAnchorVal = null;
     selEndVal    = null;
     updateSelOverlay();
+    redrawHistograms();
     resetZoom();
     if (onRangeChangeCb) onRangeChangeCb(null, null, xAxis);
   }
@@ -130,8 +194,11 @@ const ChartView = (() => {
 
   function resize() {
     if (!plots.length) return;
-    const w = Math.max(100, container.clientWidth - 20);
-    plots.forEach(({ uplot: u }) => u.setSize({ width: w, height: u.height }));
+    const w = Math.max(100, container.clientWidth - (statsVisible ? HIST_W + HIST_MARGIN : 0));
+    plots.forEach(({ uplot: u, histCanvas, histData }) => {
+      u.setSize({ width: w, height: u.height });
+      if (statsVisible && histCanvas && histData) drawHistogram(histCanvas, histData, u.height);
+    });
     updateSelOverlay();
   }
 
@@ -157,17 +224,21 @@ const ChartView = (() => {
     }
     if (emptyEl) emptyEl.style.display = 'none';
 
-    const w = Math.max(100, container.clientWidth - 20);
+    const w = Math.max(100, container.clientWidth - (statsVisible ? HIST_W + HIST_MARGIN : 0));
     available.forEach(key => {
       const def   = METRICS[key];
-      const raw   = pts.map(p => { const v = p[def.field]; return (v != null && def.transform) ? def.transform(v) : v; });
-      const yData = fillNulls(raw);
+      const yData = def.compute
+        ? def.compute(pts, fillNulls)
+        : fillNulls(pts.map(p => { const v = p[def.field]; return (v != null && def.transform) ? def.transform(v) : v; }));
       createChart(key, def, xData, yData, w, pts);
     });
 
     updateStats(currentTrack);
     // Restore anchor/end lines if a selection was active
     updateSelOverlay();
+    // Re-apply map color if active
+    _updateMapColorBtns();
+    if (mapColorMetric) _fireMapColorCb();
   }
 
   // ── Create one chart row ───────────────────────────────────────
@@ -190,16 +261,31 @@ const ChartView = (() => {
       <span class="chart-row-label">${def.label}</span>
     `;
     
+    const mapColorBtn = document.createElement('button');
+    mapColorBtn.className = 'map-color-btn icon-btn' + (mapColorMetric === metricKey ? ' active' : '');
+    mapColorBtn.dataset.metric = metricKey;
+    mapColorBtn.title = 'Color map track by this metric';
+    mapColorBtn.innerHTML = '<span class="material-symbols-rounded">colorize</span>';
+    mapColorBtn.addEventListener('click', () => toggleMapColor(metricKey));
+
     const minmaxEl = document.createElement('div');
     minmaxEl.className = 'chart-minmax';
-    const curValEl = document.createElement('span');
-    curValEl.className = 'chart-cur-value';
-    curValEl.style.color = def.color;
-    header.append(labelEl, minmaxEl, curValEl);
-    row.appendChild(header);
+    header.append(labelEl, mapColorBtn, minmaxEl);
+
+    const rowBody = document.createElement('div');
+    rowBody.className = 'chart-row-body';
 
     const plotEl = document.createElement('div');
-    row.appendChild(plotEl);
+    rowBody.appendChild(plotEl);
+
+    const histCol    = document.createElement('div');
+    histCol.className = 'hist-col' + (statsVisible ? ' visible' : '');
+    const histCanvas  = document.createElement('canvas');
+    histCanvas.className = 'hist-canvas';
+    histCol.appendChild(histCanvas);
+    rowBody.appendChild(histCol);
+
+    row.append(header, rowBody);
     container.appendChild(row);
 
     const isDistAxis = xAxis === 'distance';
@@ -217,7 +303,7 @@ const ChartView = (() => {
 
     const uOpts = {
       width: w, height: 130,
-      padding: [4, 16, 0, 58],
+      padding: [4, 0, 0, 0],
       cursor: {
         sync:  { key: syncKey.key },
         drag:  { x: true, y: false, uni: 16 },
@@ -254,7 +340,7 @@ const ChartView = (() => {
       ],
       series: [
         {},
-        metricKey === 'elevation'
+        (metricKey === 'elevation' || metricKey === 'gradient')
           // Invisible — we draw manually in the draw hook
           ? { label: def.label, stroke: 'rgba(0,0,0,0)', fill: 'rgba(0,0,0,0)', width: 0, points: { show: false } }
           : { label: def.label, stroke: def.color, fill: hexToRgba(def.color, 0.08), width: 1.5, points: { show: false } },
@@ -262,6 +348,8 @@ const ChartView = (() => {
       hooks: {
         draw: [
           ...(metricKey === 'elevation' ? [u => drawElevationGradient(u, xData, yData, gradData)] : []),
+          ...(metricKey === 'gradient'  ? [u => drawGradientChart(u, xData, yData)] : []),
+          u => drawHoverLine(u, yData, def.color),
           u => drawPinnedDot(u, xData, yData, def.color, def),
         ],
         setCursor: [u => {
@@ -275,48 +363,40 @@ const ChartView = (() => {
               const xPx = u.cursor.left;
               const overW = u.over.offsetWidth;
 
-              // For elevation: show "1234 m  ∠ 7.2%" with gradient-matched symbol
+              // For elevation: show "1234 m  ∠ 7.2%"; for gradient: color by value
               if (metricKey === 'elevation' && gradData && gradData[idx] != null) {
                 const g = gradData[idx];
                 const gColor = gradientColor(g);
                 curYValEl.innerHTML = `${def.fmt(yData[idx], false)} <span style="color:${gColor};margin-left:6px;font-size:12px">∠</span> ${Math.abs(g).toFixed(1)}%`;
                 curYValEl.style.color = def.color;
                 curYValEl.style.borderColor = def.color + '44';
+              } else if (metricKey === 'gradient') {
+                const gColor = gradientColor(yData[idx]);
+                curYValEl.textContent = def.fmt(yData[idx], false);
+                curYValEl.style.color = gColor;
+                curYValEl.style.borderColor = gColor + '44';
               } else {
                 curYValEl.textContent = def.fmt(yData[idx], false);
                 curYValEl.style.color = def.color;
                 curYValEl.style.borderColor = def.color + '44';
               }
 
-              // Prefer right side; switch left if too close to edge
+              // Prefer right side; switch left if too close to right edge; clamp so it never bleeds over the y-axis
               const estimatedW = curYValEl.offsetWidth || (curYValEl.textContent.length * 7 + 20);
-              curYValEl.style.left    = `${xPx + overW - xPx > estimatedW + 10 ? xPx + 10 : xPx - estimatedW - 10}px`;
-              curYValEl.style.top     = `${Math.max(2, Math.min(yPx - 12, u.over.offsetHeight - 24))}px`;
+              const leftPos = overW - xPx > estimatedW + 10 ? xPx + 10 : xPx - estimatedW - 10;
+              curYValEl.style.left = `${Math.max(0, leftPos)}px`;
+              curYValEl.style.top  = `${Math.max(2, Math.min(yPx - 12, u.over.offsetHeight - 24))}px`;
               curYValEl.style.display = '';
             } else {
               curYValEl.style.display = 'none';
             }
           }
 
-          // Header cur-value (elevation shows gradient too)
-          if (idx != null && yData[idx] != null) {
-            if (metricKey === 'elevation' && gradData && gradData[idx] != null) {
-              const g = gradData[idx];
-              const gColor = gradientColor(g);
-              curValEl.style.color = def.color;
-              curValEl.innerHTML = `${def.fmt(yData[idx], false)} <span style="color:${gColor};margin-left:8px">∠</span> ${Math.abs(g).toFixed(1)}%`;
-            } else {
-              curValEl.style.color = def.color;
-              curValEl.textContent = def.fmt(yData[idx], false);
-            }
-          } else {
-            curValEl.textContent = '';
-          }
-
           // Map marker
           if (idx != null && pts[idx] && onCursorMoveCb) {
             onCursorMoveCb(pts[idx]);
           }
+          u.redraw(false);
         }],
 
         setScale: [(u, key) => {
@@ -341,11 +421,13 @@ const ChartView = (() => {
             selAnchorVal = null;
             selEndVal    = null;
             updateSelOverlay();
+            redrawHistograms();
             if (onRangeChangeCb) onRangeChangeCb(null, null, xAxis);
           } else {
             selAnchorVal = min;
             selEndVal    = max;
             updateSelOverlay();
+            redrawHistograms();
             if (onRangeChangeCb) onRangeChangeCb(min, max, xAxis);
           }
         }],
@@ -383,6 +465,11 @@ const ChartView = (() => {
     anchorHandle.className = 'sel-handle sel-handle-anchor';
     anchorHandle.style.display = 'none';
 
+    const anchorMarker = document.createElement('div');
+    anchorMarker.className = 'sel-graph-marker';
+    anchorMarker.innerHTML = '<span class="material-symbols-rounded" style="color:#000; font-size:20px; font-variation-settings:\'FILL\' 1; filter: drop-shadow(0 0 1px #fff) drop-shadow(0 0 2px #fff); opacity: 0.5">play_circle</span>';
+    anchorMarker.style.display = 'none';
+
     // End line + label + drag handle
     const endLine   = document.createElement('div');
     endLine.className = 'sel-line sel-line-end';
@@ -396,16 +483,26 @@ const ChartView = (() => {
     endHandle.className = 'sel-handle sel-handle-end';
     endHandle.style.display = 'none';
 
+    const endMarker = document.createElement('div');
+    endMarker.className = 'sel-graph-marker';
+    endMarker.innerHTML = '<span class="material-symbols-rounded" style="color:#000; font-size:20px; font-variation-settings:\'FILL\' 1; filter: drop-shadow(0 0 1px #fff) drop-shadow(0 0 2px #fff); opacity: 0.5">stop_circle</span>';
+    endMarker.style.display = 'none';
+
     // Floating cursor y-value
     const curYVal = document.createElement('div');
     curYVal.className = 'cur-y-val';
     curYVal.style.cssText = `color:${def.color};display:none`;
 
-    overlay.append(selFill, anchorLine, anchorLabel, anchorHandle, endLine, endLabel, endHandle, curYVal);
+    overlay.append(selFill, anchorLine, anchorLabel, anchorHandle, anchorMarker, endLine, endLabel, endHandle, endMarker, curYVal);
     uplot.over.appendChild(overlay);
 
     // Back-reference
-    uplot._strasse = { selFill, anchorLine, anchorLabel, anchorHandle, endLine, endLabel, endHandle, curYVal, renderMinMax };
+    uplot._strasse = {
+      selFill,
+      anchorLine, anchorLabel, anchorHandle, anchorMarker,
+      endLine, endLabel, endHandle, endMarker,
+      curYVal, renderMinMax
+    };
 
     // ── Handle drag ──
     attachHandleDrag(anchorHandle, uplot, xData, true);
@@ -428,16 +525,24 @@ const ChartView = (() => {
     });
     uplot.over.addEventListener('mouseup', () => { mousedownX = null; });
 
-    // Click to center map (fires when mouse hasn't dragged)
+    // Click to pin point (sticky selection)
     uplot.over.addEventListener('click', () => {
       if (isDragging) return;
       const idx = uplot.cursor.idx;
-      if (idx != null && pts[idx] && onClickCb) onClickCb(pts[idx]);
+      if (idx != null && pts[idx]) {
+        pinnedPtIdx = idx;
+        plots.forEach(({ uplot: u }) => u.redraw(false));
+        if (onClickCb) onClickCb(pts[idx]);
+      }
     });
 
     plotEl.addEventListener('dblclick', cancelSelection);
 
-    plots.push({ uplot, row, xData, yData, def, metricKey, minmaxEl, curValEl });
+    const histData = { yData, xData, def, BINS: 24 };
+    drawHistogram(histCanvas, histData, 130);
+    attachHistTooltip(histCanvas, histData);
+
+    plots.push({ uplot, row, xData, yData, def, metricKey, minmaxEl, histCol, histCanvas, histData });
   }
 
   // ── Selection overlay (fill + lines + handles) ───────────────
@@ -448,9 +553,13 @@ const ChartView = (() => {
   function updateAnchorLines() {
     plots.forEach(({ uplot: u }) => {
       const s = u._strasse; if (!s) return;
-      const { selFill, anchorLine, anchorLabel, anchorHandle, endLine, endLabel, endHandle } = s;
+      const {
+        selFill,
+        anchorLine, anchorLabel, anchorHandle, anchorMarker,
+        endLine, endLabel, endHandle, endMarker
+      } = s;
       if (selAnchorVal == null || selEndVal == null) {
-        [selFill, anchorLine, anchorLabel, anchorHandle, endLine, endLabel, endHandle]
+        [selFill, anchorLine, anchorLabel, anchorHandle, anchorMarker, endLine, endLabel, endHandle, endMarker]
           .forEach(el => { el.style.display = 'none'; });
         return;
       }
@@ -479,6 +588,10 @@ const ChartView = (() => {
       // Anchor handle
       anchorHandle.style.left  = `${aX}px`;
       anchorHandle.style.display = '';
+      // Anchor marker
+      anchorMarker.style.left = `${aX}px`;
+      anchorMarker.style.top = `${overH}px`;
+      anchorMarker.style.display = '';
 
       // End line
       endLine.style.left    = `${eX}px`;
@@ -493,6 +606,10 @@ const ChartView = (() => {
       // End handle
       endHandle.style.left  = `${eX}px`;
       endHandle.style.display = '';
+      // End marker
+      endMarker.style.left = `${eX}px`;
+      endMarker.style.top = `${overH}px`;
+      endMarker.style.display = '';
     });
   }
 
@@ -574,6 +691,7 @@ const ChartView = (() => {
 
   // ── Helpers ───────────────────────────────────────────────────
   function destroyPlots() {
+    if (histTooltipEl) histTooltipEl.style.display = 'none';
     plots.forEach(({ uplot: u, row }) => { syncKey.unsub(u); u.destroy(); row.remove(); });
     plots = [];
     selAnchorVal = null;
@@ -628,6 +746,50 @@ const ChartView = (() => {
     last = null;
     for (let i = out.length-1; i >= 0; i--) { if (out[i] != null) last = out[i]; else if (last != null) out[i] = last; }
     return out;
+  }
+
+  // ── Standalone gradient chart draw ───────────────────────────
+  function drawGradientChart(u, xData, yData) {
+    const ctx = u.ctx;
+    const dpr = window.devicePixelRatio || 1;
+    const bb  = u.bbox;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(bb.left, bb.top, bb.width, bb.height);
+    ctx.clip();
+
+    // Zero line
+    const zeroY = u.valToPos(0, 'y', true);
+    if (zeroY >= bb.top && zeroY <= bb.top + bb.height) {
+      ctx.beginPath();
+      ctx.setLineDash([4 * dpr, 4 * dpr]);
+      ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+      ctx.lineWidth   = 1 * dpr;
+      ctx.moveTo(bb.left, zeroY);
+      ctx.lineTo(bb.left + bb.width, zeroY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Colored line segments
+    ctx.lineWidth  = 1.5 * dpr;
+    ctx.lineJoin   = 'round';
+    ctx.lineCap    = 'round';
+    for (let i = 1; i < xData.length; i++) {
+      if (xData[i] == null || yData[i] == null || xData[i-1] == null || yData[i-1] == null) continue;
+      const x0 = u.valToPos(xData[i-1], 'x', true);
+      const y0 = u.valToPos(yData[i-1], 'y', true);
+      const x1 = u.valToPos(xData[i],   'x', true);
+      const y1 = u.valToPos(yData[i],   'y', true);
+      ctx.strokeStyle = gradientColor(yData[i]);
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.stroke();
+    }
+
+    ctx.restore();
   }
 
   // ── Gradient-colored elevation draw ──────────────────────────
@@ -722,6 +884,26 @@ const ChartView = (() => {
     plots.forEach(({ uplot: u }) => u.redraw(false));
   }
 
+  function drawHoverLine(u, yData, color) {
+    const idx = u.cursor.idx;
+    if (idx == null || yData[idx] == null || u.cursor.left < 0) return;
+
+    const cy  = u.valToPos(yData[idx], 'y', true);
+    const bb  = u.bbox;
+    const ctx = u.ctx;
+    const dpr = window.devicePixelRatio || 1;
+
+    ctx.save();
+    ctx.setLineDash([5 * dpr, 5 * dpr]);
+    ctx.strokeStyle = hexToRgba(color, 0.4);
+    ctx.lineWidth = 1 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(bb.left, cy);
+    ctx.lineTo(bb.left + bb.width, cy);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function drawPinnedDot(u, xData, yData, color, def) {
     if (pinnedPtIdx == null) return;
     const xVal = xData[pinnedPtIdx];
@@ -800,7 +982,7 @@ const ChartView = (() => {
     ctx.fill();
 
     // ── 4. Tooltip label ───────────────────────────────────────────
-    const label    = def.fmt(yVal, false);
+    const label    = `${def.fmt(yVal, false)} ${def.unit}`;
     const fontSize = 11 * dpr;
     ctx.font      = `600 ${fontSize}px system-ui, sans-serif`;
     const tw      = ctx.measureText(label).width;
@@ -840,18 +1022,264 @@ const ChartView = (() => {
     ctx.restore();
   }
 
+  // ── Histogram drawing ─────────────────────────────────────────
+  function buildHistBins(histData) {
+    if (histData.bins) return; // already built
+    const { yData, xData, BINS } = histData;
+    const values = yData.filter(v => v != null && isFinite(v));
+    if (!values.length) return;
+
+    const min  = Math.min(...values);
+    const max  = Math.max(...values);
+    const span = max - min || 1;
+
+    const bins      = new Array(BINS).fill(0);
+    const binAccum  = new Array(BINS).fill(0); // accumulated x-weight per bin (time in s or dist in km)
+
+    for (let i = 0; i < yData.length; i++) {
+      const v = yData[i];
+      if (v == null || !isFinite(v)) continue;
+      const bi = Math.min(BINS - 1, Math.floor(((v - min) / span) * BINS));
+      bins[bi]++;
+      // Weight = half-interval to prev + half-interval to next
+      if (xData) {
+        const prev = i > 0 && xData[i - 1] != null ? xData[i - 1] : xData[i];
+        const next = i < xData.length - 1 && xData[i + 1] != null ? xData[i + 1] : xData[i];
+        binAccum[bi] += (next - prev) / 2;
+      }
+    }
+
+    histData.bins     = bins;
+    histData.binAccum = binAccum;
+    histData.min      = min;
+    histData.max      = max;
+    histData.total    = values.length;
+  }
+
+  function drawHistogram(canvas, histData, chartH, hoverBinI = null) {
+    const { def, BINS } = histData;
+    buildHistBins(histData);
+    const { bins, min, max } = histData;
+    if (!bins) return;
+
+    const dpr  = window.devicePixelRatio || 1;
+    const W    = HIST_W;
+    const H    = chartH;
+    canvas.width  = W * dpr;
+    canvas.height = H * dpr;
+    canvas.style.width  = W + 'px';
+    canvas.style.height = H + 'px';
+
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, W, H);
+
+    const hasSel = selAnchorVal != null && selEndVal != null;
+    const peak   = Math.max(...bins);
+
+    // Measure label width so bars start right after them
+    const fmt    = v => (max - min < 10 ? v.toFixed(1) : v.toFixed(0));
+    ctx.font     = '9px system-ui, sans-serif';
+    const labelW = Math.ceil(Math.max(
+      ctx.measureText(`${fmt(max)} ${def.unit}`).width,
+      ctx.measureText(`${fmt(min)} ${def.unit}`).width
+    ));
+    const pad    = { t: 6, r: 4, b: 6, l: labelW + 6 };
+    histData.padL = pad.l;
+    const plotW  = W - pad.l - pad.r;
+    const plotH  = H - pad.t - pad.b;
+
+    // Compute selection bins if a range is active
+    let selBins = null;
+    if (hasSel) {
+      selBins = new Array(BINS).fill(0);
+      const selBinAccum = new Array(BINS).fill(0);
+      const { yData, xData } = histData;
+      const span = max - min || 1;
+      for (let i = 0; i < yData.length; i++) {
+        const v = yData[i];
+        if (v == null || !isFinite(v)) continue;
+        const x = xData[i];
+        if (x == null || x < selAnchorVal || x > selEndVal) continue;
+        const bi = Math.min(BINS - 1, Math.floor(((v - min) / span) * BINS));
+        selBins[bi]++;
+        const prev = i > 0 && xData[i - 1] != null ? xData[i - 1] : xData[i];
+        const next = i < xData.length - 1 && xData[i + 1] != null ? xData[i + 1] : xData[i];
+        selBinAccum[bi] += (next - prev) / 2;
+      }
+      histData.selBins     = selBins;
+      histData.selBinAccum = selBinAccum;
+    } else {
+      histData.selBins     = null;
+      histData.selBinAccum = null;
+    }
+
+    // bin 0 = lowest values → drawn at bottom; bin BINS-1 = highest → drawn at top
+    const binY = i => pad.t + (BINS - 1 - i) * (plotH / BINS);
+    const binH = plotH / BINS - 1;
+
+    // Full distribution (dimmed when selection active)
+    for (let i = 0; i < BINS; i++) {
+      if (!bins[i]) continue;
+      const bw    = (bins[i] / peak) * plotW;
+      const alpha = hasSel ? 0.15 : (0.3 + 0.6 * (bins[i] / peak));
+      ctx.fillStyle = hexToRgba(def.color, alpha);
+      ctx.fillRect(pad.l, binY(i), bw, binH);
+    }
+
+    // Selection overlay (bright)
+    if (selBins) {
+      for (let i = 0; i < BINS; i++) {
+        if (!selBins[i]) continue;
+        const bw = (selBins[i] / peak) * plotW;
+        ctx.fillStyle = hexToRgba(def.color, 0.85);
+        ctx.fillRect(pad.l, binY(i), bw, binH);
+      }
+      ctx.fillStyle = def.color;
+      ctx.fillRect(pad.l, pad.t, 2, plotH);
+    }
+
+    // CDF overlay — smooth curve from bottom (0%) to top (100%)
+    const total = bins.reduce((s, v) => s + v, 0);
+    if (total > 0) {
+      // Build CDF points: one per bin boundary, bottom→top
+      const pts2 = [{ x: pad.l, y: pad.t + plotH }];
+      let cumSum = 0;
+      for (let i = 0; i < BINS; i++) {
+        cumSum += bins[i];
+        pts2.push({ x: pad.l + (cumSum / total) * plotW, y: binY(i) });
+      }
+
+      ctx.beginPath();
+      ctx.setLineDash([2 * dpr, 3 * dpr]);
+      ctx.strokeStyle = def.color;
+      ctx.lineWidth   = 0.75 * dpr;
+      ctx.lineJoin    = 'round';
+      ctx.moveTo(pts2[0].x, pts2[0].y);
+      for (let i = 1; i < pts2.length - 1; i++) {
+        const mx = (pts2[i].x + pts2[i + 1].x) / 2;
+        const my = (pts2[i].y + pts2[i + 1].y) / 2;
+        ctx.quadraticCurveTo(pts2[i].x, pts2[i].y, mx, my);
+      }
+      ctx.lineTo(pts2[pts2.length - 1].x, pts2[pts2.length - 1].y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Axis labels: max at top, min at bottom
+    ctx.fillStyle    = '#888896';
+    ctx.font         = '9px system-ui, sans-serif';
+    ctx.textAlign    = 'right';
+    ctx.textBaseline = 'top';
+    ctx.fillText(`${fmt(max)} ${def.unit}`, pad.l - 4, pad.t);
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(`${fmt(min)} ${def.unit}`, pad.l - 4, H - pad.b);
+  }
+
+  function redrawHistograms() {
+    if (!statsVisible) return;
+    plots.forEach(({ histCanvas, histData, uplot: u }) => {
+      if (histCanvas && histData) drawHistogram(histCanvas, histData, u.height);
+    });
+  }
+
+  function attachHistTooltip(canvas, histData) {
+    let lastBinI  = null;
+    const lineEl  = document.getElementById('hist-line');
+
+    const hide = () => {
+      if (histTooltipEl) histTooltipEl.style.display = 'none';
+      if (lineEl) lineEl.style.display = 'none';
+      if (lastBinI !== null) {
+        lastBinI = null;
+        drawHistogram(canvas, histData, canvas.height / (window.devicePixelRatio || 1));
+      }
+    };
+
+    canvas.addEventListener('mousemove', e => {
+      if (!histTooltipEl) return;
+      const { bins, binAccum, min, max, BINS, def } = histData;
+      if (!bins) return;
+
+      const rect  = canvas.getBoundingClientRect();
+      const relY  = e.clientY - rect.top;
+      const pad   = { t: 6, b: 6 };
+      const plotH = rect.height - pad.t - pad.b;
+      // bins are drawn bottom-to-top: row 0 of canvas = highest bin
+      const rawI  = Math.floor(((relY - pad.t) / plotH) * BINS);
+      const binI  = BINS - 1 - rawI;
+
+      if (rawI < 0 || rawI >= BINS) { hide(); return; }
+
+      if (binI !== lastBinI) {
+        lastBinI = binI;
+        drawHistogram(canvas, histData, canvas.height / (window.devicePixelRatio || 1), binI);
+      }
+
+      const span   = max - min || 1;
+      const binMin = min + (binI / BINS) * span;
+      const binMax = min + ((binI + 1) / BINS) * span;
+      const fmt    = v => (max - min < 10 ? v.toFixed(1) : v.toFixed(0));
+      const fmtAccum = v => xAxis === 'time' ? fmtSecs(Math.round(v)) : `${v.toFixed(2)} km`;
+      const label  = xAxis === 'time' ? 'Duration' : 'Dist';
+
+      const { selBins, selBinAccum } = histData;
+      const hasSel = selBins != null;
+
+      const totalAccum = binAccum ? fmtAccum(binAccum[binI]) : null;
+      const selAccum   = hasSel && selBinAccum ? fmtAccum(selBinAccum[binI]) : null;
+
+      let html = `<span style="color:${def.color};font-weight:600">${fmt(binMin)}–${fmt(binMax)} ${def.unit}</span>`;
+      if (hasSel) {
+        html += `<br><span style="color:var(--text-muted);font-size:10px">Total &nbsp;</span><span style="color:var(--text)">${totalAccum ?? '—'}</span>`;
+        html += `<br><span style="color:var(--accent);font-size:10px">Sel &nbsp;&nbsp;&nbsp;</span><span style="color:var(--accent)">${selAccum ?? '—'}</span>`;
+      } else if (totalAccum) {
+        html += `<br><span style="color:var(--text-muted)">${label}: ${totalAccum}</span>`;
+      }
+      histTooltipEl.innerHTML = html;
+
+      // Position tooltip: fixed X left of canvas, Y centered on bin
+      histTooltipEl.style.display = 'block';
+      const ttH   = histTooltipEl.offsetHeight;
+      const ttW   = histTooltipEl.offsetWidth;
+      // binY(i) = pad.t + (BINS-1-i) * (plotH/BINS), centre = + 0.5*(plotH/BINS)
+      const binCY = rect.top + pad.t + (BINS - 1 - binI + 0.5) * (plotH / BINS);
+      const ttLeft = rect.left - ttW - 10;
+      const ttTop  = Math.round(binCY - ttH / 2);
+      histTooltipEl.style.left = `${ttLeft}px`;
+      histTooltipEl.style.top  = `${ttTop}px`;
+
+      // Dotted line: tooltip right edge → left edge of bars (through axes area)
+      if (lineEl) {
+        const lineY    = Math.round(binCY);
+        const lineLeft = ttLeft + ttW;
+        const barLeft  = rect.left + (histData.padL || 0);
+        const lineW    = barLeft - lineLeft;
+        lineEl.style.display = 'block';
+        lineEl.style.left    = `${lineLeft}px`;
+        lineEl.style.top     = `${lineY}px`;
+        lineEl.style.width   = `${Math.max(0, lineW)}px`;
+        lineEl.style.borderTopColor = hexToRgba(def.color, 0.5);
+      }
+    });
+
+    canvas.addEventListener('mouseleave', hide);
+  }
+
   function getIsDragging() {
     return isDragging;
   }
 
   return {
     init, loadTrack, clear,
-    toggleMetric, setXAxis,
+    toggleMetric, setXAxis, toggleStats,
     resetZoom, cancelSelection,
     setSelectionStats, clearSelectionStats,
     restoreSelection,
     setCursorAt, clearPinnedDot,
     resize, METRICS,
     isDragging: getIsDragging,
+    setMapColorChangeCb, toggleMapColor,
   };
+
 })();

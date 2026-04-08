@@ -178,6 +178,40 @@ document.addEventListener('click', e => {
 })();
 
 // ── Drag & Drop ───────────────────────────────────────────────────
+function readDirEntries(reader) {
+  return new Promise((resolve, reject) => {
+    const results = [];
+    const readBatch = () => reader.readEntries(batch => {
+      if (!batch.length) { resolve(results); return; }
+      results.push(...batch);
+      readBatch();
+    }, reject);
+    readBatch();
+  });
+}
+
+async function collectEntry(entry) {
+  if (entry.isFile) {
+    return new Promise((resolve, reject) => entry.file(resolve, reject));
+  }
+  const reader = entry.createReader();
+  const entries = await readDirEntries(reader);
+  const results = await Promise.allSettled(entries.map(collectEntry));
+  return results.flatMap(r => r.status === 'fulfilled' ? [r.value].flat() : []);
+}
+
+async function collectDroppedFiles(dataTransfer) {
+  // entries must be captured synchronously before the event is released
+  const entries = Array.from(dataTransfer.items || [])
+    .map(i => i.webkitGetAsEntry?.())
+    .filter(Boolean);
+  if (entries.length) {
+    const results = await Promise.allSettled(entries.map(collectEntry));
+    return results.flatMap(r => r.status === 'fulfilled' ? [r.value].flat() : []);
+  }
+  return Array.from(dataTransfer.files);
+}
+
 function initDropZone() {
   const zone = document.getElementById('drop-zone');
   const input = document.getElementById('file-input');
@@ -200,34 +234,11 @@ function initDropZone() {
     if (e.target !== input) input.click();
   });
 
-  const traverse = async (entry, results) => {
-    if (entry.isFile) {
-      results.push(new Promise(resolve => entry.file(resolve)));
-    } else if (entry.isDirectory) {
-      const reader = entry.createReader();
-      const entries = await new Promise(resolve => reader.readEntries(resolve));
-      for (const e of entries) await traverse(e, results);
-    }
-  };
-
   const onDrop = async e => {
     e.preventDefault();
     zone.classList.remove('drag-over');
-    
-    const results = [];
-    const items = Array.from(e.dataTransfer.items || []);
-    for (const item of items) {
-      const entry = item.webkitGetAsEntry?.();
-      if (entry) await traverse(entry, results);
-    }
-
-    if (results.length) {
-      const files = await Promise.all(results);
-      handleFiles(files);
-    } else {
-      const files = Array.from(e.dataTransfer.files);
-      handleFiles(files);
-    }
+    const files = await collectDroppedFiles(e.dataTransfer);
+    handleFiles(files);
   };
   zone.addEventListener('drop', onDrop);
   document.body.addEventListener('drop', onDrop);
@@ -235,7 +246,8 @@ function initDropZone() {
 
 // ── File loading ──────────────────────────────────────────────────
 async function handleFiles(files) {
-  const valid = files.filter(f => /\.(gpx|fit|tcx|kml)$/i.test(f.name));
+  const existingFilenames = new Set(Object.values(tracks).map(t => t.filename));
+  const valid = files.filter(f => /\.(gpx|fit|tcx|kml)$/i.test(f.name) && !existingFilenames.has(f.name));
   if (!valid.length) {
     showToast('No supported files found (GPX, FIT, TCX, KML)', 'error');
     return;
@@ -377,133 +389,139 @@ function selectTrack(id, fit = true) {
 
   // Update UI immediately
   renderTrackList();
-  renderDetails(tracks[id]);
 
-  MapView.setSelectedTrack(id);
-  MapView.clearHighlight();
-  ChartView.clearPinnedDot();
-  if (fit) MapView.fitTrack(id);
+  // Render details
+  const activeTab = document.querySelector('.tab-btn.active').dataset.tab;
+  if (activeTab === 'details') renderDetails(tracks[id]);
+
+  // Tell sub-views
+  MapView.selectTrack(id, fit);
   ChartView.loadTrack(tracks[id]);
 }
 
-async function deleteTrack(id) {
+function deleteTrack(id) {
   MapView.removeTrack(id);
-  await Storage.remove(id);
+  Storage.delete(id);
   delete tracks[id];
+
   if (selectedId === id) {
     selectedId = null;
-    ChartView.clear();
     UrlState.patch({ track: null, sel: null });
-    renderDetails(null);
+    ChartView.clear();
+    const details = document.getElementById('details-view');
+    if (details) details.innerHTML = '<div id="details-empty">Select a track for details</div>';
   }
   renderTrackList();
 }
 
-async function clearAll() {
-  if (!Object.keys(tracks).length) return;
-  if (!confirm('Remove all tracks?')) return;
-  for (const id of Object.keys(tracks)) MapView.removeTrack(id);
+function clearAll() {
+  Object.keys(tracks).forEach(id => {
+    MapView.removeTrack(id);
+    Storage.delete(id);
+  });
   tracks = {};
   selectedId = null;
-  colorIdx = 0;
-  ChartView.clear();
-  await Storage.clear();
   UrlState.patch({ track: null, sel: null });
-  renderDetails(null);
+  ChartView.clear();
   renderTrackList();
 }
 
-// ── Details rendering ─────────────────────────────────────────────
+// ── Details View ──────────────────────────────────────────────────
 function renderDetails(track) {
-  const container = document.getElementById('details-content');
+  const container = document.getElementById('details-view');
   if (!container) return;
 
-  if (!track) {
-    container.innerHTML = '<div class="details-empty">Select a track to view details</div>';
-    return;
-  }
+  const s = track.stats;
+  const dist = s.totalDist != null ? (s.totalDist/1000).toFixed(2) : '--';
+  const time = s.duration  != null ? fmtDuration(s.duration) : '--';
+  const move = s.movingTime != null ? fmtDuration(s.movingTime) : '--';
+  const gain = s.elevGain  != null ? Math.round(s.elevGain) : '--';
+  const loss = s.elevLoss  != null ? Math.round(s.elevLoss) : '--';
+  const vMin = s.minEle    != null ? Math.round(s.minEle) : '--';
+  const vMax = s.maxEle    != null ? Math.round(s.maxEle) : '--';
+  const sAvg = s.avgSpeed  != null ? (s.avgSpeed * 3.6).toFixed(1) : '--';
+  const sMax = s.maxSpeed  != null ? (s.maxSpeed * 3.6).toFixed(1) : '--';
 
-  try {
-    const s = track.stats || {};
-    const pts = track.points || [];
-
-    const fmtDate  = d => d ? new Date(d).toLocaleString() : '—';
-    const fmtDist  = d => d != null ? `${(d/1000).toFixed(2)} km` : '—';
-    const fmtElev  = e => e != null ? `${Math.round(e)} m` : '—';
-    const fmtSpeed = sp => sp != null ? `${(sp*3.6).toFixed(1)} km/h` : '—';
-    const fmtDur   = ms => ms != null ? fmtDuration(ms) : '—';
-    const fmtVal   = (v, unit = '') => v != null ? `${v}${unit}` : '—';
-
-    container.innerHTML = `
-      <div class="details-grid">
-        <div class="details-section">
-          <h3>General</h3>
-          <ul class="details-list">
-            <li class="details-item"><span class="details-label">Name</span><span class="details-value">${escHtml(track.name || 'Unnamed')}</span></li>
-            <li class="details-item"><span class="details-label">Filename</span><span class="details-value">${escHtml(track.filename || '—')}</span></li>
-            <li class="details-item"><span class="details-label">Format</span><span class="details-value">${(track.format || '—').toUpperCase()}</span></li>
-            <li class="details-item"><span class="details-label">Points</span><span class="details-value">${pts.length.toLocaleString()}</span></li>
-            <li class="details-item"><span class="details-label">Date</span><span class="details-value">${fmtDate(pts[0]?.time)}</span></li>
-          </ul>
-        </div>
-        <div class="details-section">
-          <h3>Core Metrics</h3>
-          <ul class="details-list">
-            <li class="details-item"><span class="details-label">Distance</span><span class="details-value">${fmtDist(s.totalDist)}</span></li>
-            <li class="details-item"><span class="details-label">Moving Time</span><span class="details-value">${fmtDur(s.duration)}</span></li>
-            <li class="details-item"><span class="details-label">Elevation Gain</span><span class="details-value">${fmtElev(s.elevGain)}</span></li>
-            <li class="details-item"><span class="details-label">Avg Speed</span><span class="details-value">${fmtSpeed(s.avgSpeed)}</span></li>
-            <li class="details-item"><span class="details-label">Max Speed</span><span class="details-value">${fmtSpeed(s.maxSpeed)}</span></li>
-          </ul>
-        </div>
-        <div class="details-section">
-          <h3>Performance</h3>
-          <ul class="details-list">
-            <li class="details-item"><span class="details-label">Avg Power</span><span class="details-value">${fmtVal(s.avgPower, ' W')}</span></li>
-            <li class="details-item"><span class="details-label">Max Power</span><span class="details-value">${fmtVal(s.maxPower, ' W')}</span></li>
-            <li class="details-item"><span class="details-label">Avg HR</span><span class="details-value">${fmtVal(s.avgHR, ' bpm')}</span></li>
-            <li class="details-item"><span class="details-label">Max HR</span><span class="details-value">${fmtVal(s.maxHR, ' bpm')}</span></li>
-            <li class="details-item"><span class="details-label">Avg Cadence</span><span class="details-value">${fmtVal(s.avgCadence, ' rpm')}</span></li>
-          </ul>
-        </div>
-        <div class="details-section">
-          <h3>Hardware</h3>
-          <ul class="details-list">
-            <li class="details-item"><span class="details-label">Device</span><span class="details-value">${escHtml(track.device || 'Unknown')}</span></li>
-            <li class="details-item"><span class="details-label">Sensors</span><span class="details-value">${s.sensors?.length ? s.sensors.join(', ') : 'GPS Only'}</span></li>
-          </ul>
-        </div>
-      </div>
-    `;
-  } catch (err) {
-    console.error('renderDetails error:', err);
-  }
+  container.innerHTML = `
+    <div class="details-header">
+      <h3>${escHtml(track.name)}</h3>
+      <div class="details-filename">${escHtml(track.filename)}</div>
+    </div>
+    <div class="details-grid">
+      <div class="details-item"><label>Distance</label><span>${dist} km</span></div>
+      <div class="details-item"><label>Duration</label><span>${time}</span></div>
+      <div class="details-item"><label>Moving Time</label><span>${move}</span></div>
+      <div class="details-item"><label>Elevation Gain</label><span>${gain} m</span></div>
+      <div class="details-item"><label>Elevation Loss</label><span>${loss} m</span></div>
+      <div class="details-item"><label>Min Elevation</label><span>${vMin} m</span></div>
+      <div class="details-item"><label>Max Elevation</label><span>${vMax} m</span></div>
+      <div class="details-item"><label>Avg Speed</label><span>${sAvg} km/h</span></div>
+      <div class="details-item"><label>Max Speed</label><span>${sMax} km/h</span></div>
+    </div>
+  `;
 }
 
-// ── Color picker ──────────────────────────────────────────────────
-function showColorPicker(anchor, track) {
-  // Remove existing pickers
+// ── Chart Callbacks ───────────────────────────────────────────────
+function onChartCursorMove(pt) {
+  MapView.highlightPoint(pt);
+}
+
+function onChartRangeChange(minX, maxX, xAxis) {
+  UrlState.patch({ sel: (minX != null && maxX != null) ? [minX, maxX] : null });
+  MapView.highlightRange(selectedId, minX, maxX, xAxis);
+}
+
+function onChartClick(pt) {
+  MapView.panTo(pt.lat, pt.lng);
+}
+
+// ── Map Callbacks ─────────────────────────────────────────────────
+function onMapMove(lat, lng, zoom) {
+  UrlState.patch({ map: [lat.toFixed(6), lng.toFixed(6), zoom] });
+}
+
+function onMapPointClick(trackId, ptIdx) {
+  if (trackId !== selectedId) selectTrack(trackId, false);
+  ChartView.pinPoint(ptIdx);
+}
+
+// ── Helpers ───────────────────────────────────────────────────────
+function fmtDuration(s) {
+  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60);
+  return h > 0 ? `${h}h ${m}m` : `${m}m ${s%60}s`;
+}
+
+function escHtml(str) {
+  const p = document.createElement('p');
+  p.textContent = str;
+  return p.innerHTML;
+}
+
+function showColorPicker(anchorEl, track) {
   document.querySelectorAll('.color-picker-popup').forEach(el => el.remove());
 
   const popup = document.createElement('div');
   popup.className = 'color-picker-popup';
   popup.style.cssText = `
-    position:fixed; z-index:9000; padding:8px; border-radius:8px;
-    background:var(--surface2); border:1px solid var(--border);
-    display:grid; grid-template-columns:repeat(5,1fr); gap:5px;
-    box-shadow:0 8px 24px rgba(0,0,0,0.5);
+    position: fixed;
+    z-index: 10000;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px;
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
   `;
 
   TRACK_COLORS.forEach(c => {
     const dot = document.createElement('div');
-    dot.style.cssText = `width:20px;height:20px;border-radius:50%;background:${c};cursor:pointer;
-      border:2px solid ${c === track.color ? '#fff' : 'transparent'};transition:transform .1s;`;
-    dot.title = c;
-    dot.addEventListener('mouseover', () => dot.style.transform = 'scale(1.2)');
-    dot.addEventListener('mouseout',  () => dot.style.transform = '');
+    dot.style.cssText = `width:20px;height:20px;border-radius:50%;background:${c};cursor:pointer;border:1.5px solid transparent;`;
+    if (track.color === c) dot.style.borderColor = 'var(--text)';
     dot.addEventListener('click', () => {
       track.color = c;
-      MapView.setTrackColor(track.id, c);
+      MapView.updateTrackStyle(track.id, { color: c });
       Storage.put(track);
       renderTrackList();
       popup.remove();
@@ -511,192 +529,65 @@ function showColorPicker(anchor, track) {
     popup.appendChild(dot);
   });
 
-  const rect = anchor.getBoundingClientRect();
+  const rect = anchorEl.getBoundingClientRect();
   popup.style.left = `${Math.min(rect.left, window.innerWidth - 140)}px`;
   popup.style.top  = `${rect.bottom + 4}px`;
   document.body.appendChild(popup);
 
   const dismiss = e => { if (!popup.contains(e.target)) { popup.remove(); document.removeEventListener('click', dismiss); } };
-  setTimeout(() => document.addEventListener('click', dismiss), 0);
+  setTimeout(() => document.addEventListener('click', dismiss), 10);
 }
 
-// ── Cursor sync ───────────────────────────────────────────────────
-function onChartCursorMove(pt) {
-  if (pt && pt.lat != null && pt.lon != null) {
-    MapView.showCursorAt(pt.lat, pt.lon);
-  }
-}
-
-function onChartRangeChange(xMin, xMax, axis) {
-  if (!selectedId) return;
-  const track = tracks[selectedId];
-  if (!track) return;
-
-  // null means selection was cancelled
-  if (xMin == null) {
-    MapView.clearHighlight();
-    ChartView.clearSelectionStats();
-    UrlState.patch({ sel: null });
-    return;
-  }
-
-  const pts = track.points;
-  const t0  = pts[0]?.time || 0;
-
-  let iMin = 0, iMax = pts.length - 1;
-  for (let i = 0; i < pts.length; i++) {
-    const x = axis === 'distance' ? pts[i].dist / 1000 : (pts[i].time - t0) / 1000;
-    if (x >= xMin) { iMin = i; break; }
-  }
-  for (let i = pts.length - 1; i >= 0; i--) {
-    const x = axis === 'distance' ? pts[i].dist / 1000 : (pts[i].time - t0) / 1000;
-    if (x <= xMax) { iMax = i; break; }
-  }
-
-  if (iMin <= 0 && iMax >= pts.length - 1) {
-    MapView.clearHighlight();
-    ChartView.clearSelectionStats();
-    UrlState.patch({ sel: null });
-  } else {
-    // Only fit map if we're not currently dragging the handles/zoom
-    const shouldFit = !ChartView.isDragging();
-    MapView.highlightSegment(selectedId, pts, iMin, iMax, shouldFit);
-    ChartView.setSelectionStats(computeRangeStats(pts, iMin, iMax));
-    UrlState.patch({ sel: [xMin, xMax] });
-  }
-}
-
-function computeRangeStats(pts, iMin, iMax) {
-  const slice = pts.slice(iMin, iMax + 1);
-  let elevGain = 0, powerSum = 0, powerN = 0, hrSum = 0, hrN = 0, speedSum = 0, speedN = 0;
-  for (let i = 1; i < slice.length; i++) {
-    const p = slice[i], prev = slice[i-1];
-    if (p.ele != null && prev.ele != null && p.ele > prev.ele) elevGain += p.ele - prev.ele;
-    if (p.power != null) { powerSum += p.power; powerN++; }
-    if (p.hr    != null) { hrSum    += p.hr;    hrN++; }
-    if (p.speed != null) { speedSum += p.speed; speedN++; }
-  }
-  const totalDist = (slice[slice.length-1]?.dist || 0) - (slice[0]?.dist || 0);
-  const duration  = (slice[slice.length-1]?.time && slice[0]?.time)
-    ? slice[slice.length-1].time - slice[0].time : null;
-  return {
-    totalDist,
-    elevGain,
-    duration,
-    avgSpeed:  speedN ? speedSum / speedN : null,
-    avgPower:  powerN ? Math.round(powerSum / powerN) : null,
-    avgHR:     hrN    ? Math.round(hrSum    / hrN)    : null,
-  };
-}
-
-function onChartClick(pt) {
-  if (pt?.lat != null && pt?.lon != null) {
-    MapView.centerOn(pt.lat, pt.lon);
-    MapView.closePopup();
-  }
-}
-
-function onMapPointClick(trackId, ptIdx) {
-  // If a different track was clicked, select it first
-  if (trackId !== selectedId) {
-    selectTrack(trackId);
-  } else {
-    // Already selected, but make sure details are up to date
-    renderDetails(tracks[selectedId]);
-  }
-  // Mark the point on all charts
-  ChartView.setCursorAt(ptIdx);
-}
-
-function onMapMove(lat, lng, zoom) {
-  UrlState.patch({ map: [+lat.toFixed(5), +lng.toFixed(5), zoom] });
-}
-
-// ── Resize handle ─────────────────────────────────────────────────
+// ── Resize Handle ─────────────────────────────────────────────────
 function initResizeHandle() {
-  const handle     = document.getElementById('resize-handle');
-  const mapCont    = document.getElementById('map-container');
-  const chartPanel = document.getElementById('chart-panel');
+  const handle = document.getElementById('resize-handle');
+  const panel  = document.getElementById('chart-panel');
+  if (!handle || !panel) return;
 
-  let startY, startMapH;
-
-  handle.addEventListener('mousedown', e => {
-    startY = e.clientY;
-    startMapH = mapCont.offsetHeight;
-    handle.classList.add('dragging');
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup',   onUp);
-  });
-
-  function onMove(e) {
-    const dy    = e.clientY - startY;
-    const newH  = Math.max(150, startMapH + dy);
-    const mainH = document.getElementById('main').offsetHeight;
-    const maxH  = mainH - 100 - 6; // leave min 100px for charts
-    mapCont.style.height = `${Math.min(newH, maxH)}px`;
-    mapCont.style.flex   = 'none';
-    MapView.invalidateSize();
+  let startY, startH;
+  const onMove = e => {
+    const dy = startY - (e.touches ? e.touches[0].clientY : e.clientY);
+    chartHeight = Math.max(100, Math.min(window.innerHeight - 200, startH + dy));
+    panel.style.height = `${chartHeight}px`;
     ChartView.resize();
-  }
-
-  function onUp() {
-    handle.classList.remove('dragging');
+  };
+  const onUp = () => {
     document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup',   onUp);
-  }
+    document.removeEventListener('mouseup', onUp);
+    document.removeEventListener('touchmove', onMove);
+    document.removeEventListener('touchend', onUp);
+  };
+  handle.addEventListener('mousedown', e => {
+    startY = e.clientY; startH = panel.offsetHeight;
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+  handle.addEventListener('touchstart', e => {
+    startY = e.touches[0].clientY; startH = panel.offsetHeight;
+    document.addEventListener('touchmove', onMove);
+    document.addEventListener('touchend', onUp);
+  });
 }
 
 // ── Loading overlay ───────────────────────────────────────────────
 function showLoading(msg) {
   const el = document.createElement('div');
   el.className = 'loading-overlay';
-  el.innerHTML = `<div class="spinner"></div><div class="loading-text">${escHtml(msg)}</div>`;
+  el.innerHTML = `<div class="loading-spinner"></div><div class="loading-text">${msg}</div>`;
   document.body.appendChild(el);
-  return {
-    setText: t => { const tx = el.querySelector('.loading-text'); if (tx) tx.textContent = t; },
-    el,
-  };
+  return { el, setText: m => el.querySelector('.loading-text').textContent = m };
 }
 
 function hideLoading(overlay) {
   if (overlay?.el) overlay.el.remove();
 }
 
-// ── Toast ─────────────────────────────────────────────────────────
 function showToast(msg, type = '') {
-  let container = document.getElementById('toast-container');
-  if (!container) {
-    container = document.createElement('div');
-    container.id = 'toast-container';
-    document.body.appendChild(container);
-  }
-  const t = document.createElement('div');
-  t.className = `toast${type ? ' ' + type : ''}`;
-  t.textContent = msg;
-  container.appendChild(t);
-  setTimeout(() => t.remove(), 4000);
-}
-
-// ── Utilities ─────────────────────────────────────────────────────
-function fmtDuration(ms) {
-  const s = Math.floor(ms / 1000);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const ss = s % 60;
-  return h > 0
-    ? `${h}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`
-    : `${m}:${String(ss).padStart(2,'0')}`;
-}
-
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-function slugify(s) {
-  return String(s)
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')  // strip accents
-    .replace(/[^a-zA-Z0-9]+/g, '-')                    // non-alphanum → hyphen
-    .replace(/-+/g, '-')                               // collapse multiple hyphens
-    .replace(/^-+|-+$/g, '')                           // trim hyphens from ends
-    .toLowerCase() || 'track';                         // fallback
+  const container = document.getElementById('toast-container');
+  if (!container) return;
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = msg;
+  container.appendChild(el);
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 400); }, 3000);
 }
