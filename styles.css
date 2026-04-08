@@ -103,16 +103,24 @@ input  { font: inherit; }
 .drop-icon    { font-size: 22px; color: var(--text-muted); margin-bottom: 4px; }
 .drop-primary { font-size: 12px; font-weight: 500; color: var(--text); }
 .drop-formats { font-size: 10px; color: var(--text-muted); margin-top: 3px; letter-spacing: 0.5px; }
-.drop-browse  {
-  display: inline-block;
+.drop-browse-container {
   margin-top: 8px;
   font-size: 11px;
+  color: var(--text-muted);
+}
+.drop-browse  {
+  display: inline-block;
   color: var(--accent);
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 .drop-browse:hover { color: var(--accent-hover); }
+.drop-separator {
+  margin: 0 6px;
+  color: var(--border2);
+  vertical-align: middle;
+}
 
 /* Track list header */
 #track-list-header {
@@ -433,6 +441,13 @@ input  { font: inherit; }
   color: var(--text-muted);
   transition: all 0.12s;
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.metric-pill .material-symbols-rounded {
+  font-size: 16px;
+  margin-top: -1px;
 }
 .metric-pill:hover { border-color: var(--pill-color); color: var(--text); }
 .metric-pill.active { border-color: var(--pill-color); color: var(--pill-color); background: color-mix(in srgb, var(--pill-color) 10%, transparent); }
@@ -596,7 +611,19 @@ input  { font: inherit; }
   min-height: 28px;
 }
 
-/* label moves to header now (not absolutely positioned) */
+.chart-row-label-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.chart-row-icon {
+  font-size: 18px;
+  color: var(--text-dim);
+  line-height: 1;
+}
+
 .chart-row .chart-row-label {
   position: static;
   font-size: 11px;
@@ -605,7 +632,6 @@ input  { font: inherit; }
   letter-spacing: 0.8px;
   color: var(--text-muted);
   white-space: nowrap;
-  flex-shrink: 0;
 }
 
 .chart-minmax {

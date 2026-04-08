@@ -158,10 +158,19 @@ document.addEventListener('click', e => {
     handleFiles(Array.from(e.target.files));
     e.target.value = '';
   });
+  document.getElementById('folder-input').addEventListener('change', e => {
+    handleFiles(Array.from(e.target.files));
+    e.target.value = '';
+  });
 
   // Keyboard shortcuts
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') MapView.hideCursor();
+    if (e.key === 'Escape') {
+      MapView.hideCursor();
+      MapView.closePopup?.();
+      // Dismiss color picker if open
+      document.querySelectorAll('.color-picker-popup').forEach(el => el.remove());
+    }
   });
 
   // Resize charts when window changes
@@ -171,6 +180,7 @@ document.addEventListener('click', e => {
 // ── Drag & Drop ───────────────────────────────────────────────────
 function initDropZone() {
   const zone = document.getElementById('drop-zone');
+  const input = document.getElementById('file-input');
 
   ['dragenter','dragover'].forEach(ev => {
     zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.add('drag-over'); });
@@ -182,11 +192,42 @@ function initDropZone() {
     document.body.addEventListener(ev, () => zone.classList.remove('drag-over'));
   });
 
-  const onDrop = e => {
+  zone.addEventListener('click', (e) => {
+    // If clicking the folder-input or its label, let the browser handle it.
+    if (e.target.closest('#folder-label') || e.target.closest('#folder-input')) {
+      return;
+    }
+    if (e.target !== input) input.click();
+  });
+
+  const traverse = async (entry, results) => {
+    if (entry.isFile) {
+      results.push(new Promise(resolve => entry.file(resolve)));
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      const entries = await new Promise(resolve => reader.readEntries(resolve));
+      for (const e of entries) await traverse(e, results);
+    }
+  };
+
+  const onDrop = async e => {
     e.preventDefault();
     zone.classList.remove('drag-over');
-    const files = Array.from(e.dataTransfer.files);
-    handleFiles(files);
+    
+    const results = [];
+    const items = Array.from(e.dataTransfer.items || []);
+    for (const item of items) {
+      const entry = item.webkitGetAsEntry?.();
+      if (entry) await traverse(entry, results);
+    }
+
+    if (results.length) {
+      const files = await Promise.all(results);
+      handleFiles(files);
+    } else {
+      const files = Array.from(e.dataTransfer.files);
+      handleFiles(files);
+    }
   };
   zone.addEventListener('drop', onDrop);
   document.body.addEventListener('drop', onDrop);

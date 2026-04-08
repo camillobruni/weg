@@ -7,12 +7,12 @@ const ChartView = (() => {
 
   // ── Metric definitions ─────────────────────────────────────────
   const METRICS = {
-    elevation:   { label: 'Elevation',   unit: 'm',    color: '#4ECDC4', field: 'ele',   fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} m`,     fmtAxis: v => v.toFixed(0),  transform: null },
-    speed:       { label: 'Speed',       unit: 'km/h', color: '#45B7D1', field: 'speed', fmt: (v, s) => s ? `${v.toFixed(1)}` : `${v.toFixed(1)} km/h`,  fmtAxis: v => v.toFixed(1),  transform: v => v * 3.6 },
-    power:       { label: 'Power',       unit: 'W',    color: '#F7DC6F', field: 'power', fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} W`,     fmtAxis: v => v.toFixed(0),  transform: null },
-    hr:          { label: 'Heart Rate',  unit: 'bpm',  color: '#FF6B6B', field: 'hr',    fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} bpm`,   fmtAxis: v => v.toFixed(0),  transform: null },
-    cadence:     { label: 'Cadence',     unit: 'rpm',  color: '#BB8FCE', field: 'cad',   fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} rpm`,   fmtAxis: v => v.toFixed(0),  transform: null },
-    temperature: { label: 'Temperature', unit: '°C',   color: '#F8C471', field: 'temp',  fmt: (v, s) => s ? `${v.toFixed(1)}` : `${v.toFixed(1)} °C`,    fmtAxis: v => v.toFixed(1),  transform: null },
+    elevation:   { label: 'Elevation',   icon: 'height',    unit: 'm',    color: '#4ECDC4', field: 'ele',   fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} m`,     fmtAxis: v => v.toFixed(0),  transform: null },
+    speed:       { label: 'Speed',       icon: 'speed',     unit: 'km/h', color: '#45B7D1', field: 'speed', fmt: (v, s) => s ? `${v.toFixed(1)}` : `${v.toFixed(1)} km/h`,  fmtAxis: v => v.toFixed(1),  transform: v => v * 3.6 },
+    power:       { label: 'Power',       icon: 'bolt',      unit: 'W',    color: '#F7DC6F', field: 'power', fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} W`,     fmtAxis: v => v.toFixed(0),  transform: null },
+    hr:          { label: 'Heart Rate',  icon: 'favorite',  unit: 'bpm',  color: '#FF6B6B', field: 'hr',    fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} bpm`,   fmtAxis: v => v.toFixed(0),  transform: null },
+    cadence:     { label: 'Cadence',     icon: 'directions_run', unit: 'rpm',  color: '#BB8FCE', field: 'cad',   fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} rpm`,   fmtAxis: v => v.toFixed(0),  transform: null },
+    temperature: { label: 'Temperature', icon: 'thermostat', unit: '°C',   color: '#F8C471', field: 'temp',  fmt: (v, s) => s ? `${v.toFixed(1)}` : `${v.toFixed(1)} °C`,    fmtAxis: v => v.toFixed(1),  transform: null },
   };
 
   // ── State ──────────────────────────────────────────────────────
@@ -182,9 +182,14 @@ const ChartView = (() => {
     // Header
     const header = document.createElement('div');
     header.className = 'chart-row-header';
-    const labelEl  = document.createElement('span');
-    labelEl.className = 'chart-row-label';
-    labelEl.textContent = def.label;
+    
+    const labelEl  = document.createElement('div');
+    labelEl.className = 'chart-row-label-group';
+    labelEl.innerHTML = `
+      <span class="material-symbols-rounded chart-row-icon">${def.icon}</span>
+      <span class="chart-row-label">${def.label}</span>
+    `;
+    
     const minmaxEl = document.createElement('div');
     minmaxEl.className = 'chart-minmax';
     const curValEl = document.createElement('span');

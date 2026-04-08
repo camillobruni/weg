@@ -33,14 +33,21 @@
         </div>
       </div>
 
-      <div id="drop-zone" class="drop-idle">
+      <div id="drop-zone" class="drop-idle" style="cursor: pointer;">
         <div class="drop-icon material-symbols-rounded">download</div>
         <div class="drop-primary">Drop GPS files here</div>
         <div class="drop-formats">GPX · FIT · TCX · KML</div>
-        <label class="drop-browse">
-          or browse
-          <input type="file" id="file-input" multiple accept=".gpx,.fit,.tcx,.kml" hidden>
-        </label>
+        <div class="drop-browse-container">
+          <label class="drop-browse">
+            or browse files
+            <input type="file" id="file-input" multiple accept=".gpx,.fit,.tcx,.kml" hidden>
+          </label>
+          <span class="drop-separator">·</span>
+          <label class="drop-browse" id="folder-label" for="folder-input">
+            folders
+            <input type="file" id="folder-input" webkitdirectory directory hidden>
+          </label>
+        </div>
       </div>
 
       <div id="track-list-header">
@@ -90,12 +97,24 @@
         <div id="tab-graphs" class="tab-content active">
           <div id="chart-toolbar">
             <div id="metric-pills">
-              <button class="metric-pill active" data-metric="elevation" style="--pill-color:#4ECDC4">Elevation</button>
-              <button class="metric-pill active" data-metric="speed"     style="--pill-color:#45B7D1">Speed</button>
-              <button class="metric-pill"        data-metric="power"     style="--pill-color:#F7DC6F">Power</button>
-              <button class="metric-pill"        data-metric="hr"        style="--pill-color:#FF6B6B">Heart Rate</button>
-              <button class="metric-pill"        data-metric="cadence"   style="--pill-color:#BB8FCE">Cadence</button>
-              <button class="metric-pill"        data-metric="temperature" style="--pill-color:#F8C471">Temp</button>
+              <button class="metric-pill active" data-metric="elevation" style="--pill-color:#4ECDC4">
+                <span class="material-symbols-rounded">height</span>Elevation
+              </button>
+              <button class="metric-pill active" data-metric="speed"     style="--pill-color:#45B7D1">
+                <span class="material-symbols-rounded">speed</span>Speed
+              </button>
+              <button class="metric-pill"        data-metric="power"     style="--pill-color:#F7DC6F">
+                <span class="material-symbols-rounded">bolt</span>Power
+              </button>
+              <button class="metric-pill"        data-metric="hr"        style="--pill-color:#FF6B6B">
+                <span class="material-symbols-rounded">favorite</span>Heart Rate
+              </button>
+              <button class="metric-pill"        data-metric="cadence"   style="--pill-color:#BB8FCE">
+                <span class="material-symbols-rounded">directions_run</span>Cadence
+              </button>
+              <button class="metric-pill"        data-metric="temperature" style="--pill-color:#F8C471">
+                <span class="material-symbols-rounded">thermostat</span>Temp
+              </button>
             </div>
             <div id="chart-options">
               <div class="seg-ctrl" id="x-axis-ctrl">
