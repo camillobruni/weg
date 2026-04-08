@@ -18,15 +18,15 @@ async function build() {
   // We mark dependencies as external so they are not included in the main bundle
   const ctxWeg = await esbuild.context({
     ...baseConfig,
-    entryPoints: ['src/app.js'],
+    entryPoints: ['src/app.ts'],
     entryNames: 'weg',
-    external: ['leaflet', 'uplot', 'fit-parser'],
+    external: ['leaflet', 'uplot', 'fit-file-parser'],
   });
 
   // 2. Bundle Vendors
   const ctxVendor = await esbuild.context({
     ...baseConfig,
-    entryPoints: ['src/vendor.js'],
+    entryPoints: ['src/vendor.ts'],
     entryNames: 'vendor',
   });
 

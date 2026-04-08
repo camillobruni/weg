@@ -1,25 +1,54 @@
 'use strict';
 
-// ── File Parsers ──────────────────────────────────────────────────
-// Returns a normalised TrackData object:
-// {
-//   name: string,
-//   device: string | null,
-//   format: 'gpx'|'fit'|'tcx'|'kml',
-//   points: TrackPoint[],
-//   stats: TrackStats,
-// }
-//
-// TrackPoint: { lat, lon, ele, time, hr, cad, power, speed, temp, dist }
-//   lat/lon: degrees, ele: metres, time: ms epoch,
-//   speed: m/s, dist: cumulative metres
+import FitParser from 'fit-file-parser';
 
-import FitParser from 'fit-parser';
+export interface TrackPoint {
+  lat: number;
+  lon: number;
+  ele: number | null;
+  time: number | null;
+  hr: number | null;
+  cad: number | null;
+  power: number | null;
+  speed: number | null;
+  temp: number | null;
+  dist?: number;
+  gradient?: number | null;
+}
+
+export interface TrackStats {
+  totalDist: number;
+  elevGain: number;
+  elevLoss: number;
+  duration: number | null;
+  avgSpeed: number | null;
+  maxSpeed: number;
+  avgPower: number | null;
+  maxPower: number;
+  avgHR: number | null;
+  maxHR: number;
+  avgCadence: number | null;
+  sensors: string[];
+  startTime?: number | null;
+}
+
+export interface TrackData {
+  id: string;
+  name: string;
+  device: string | null;
+  format: 'gpx' | 'fit' | 'tcx' | 'kml';
+  points: TrackPoint[];
+  stats: TrackStats;
+  color: string;
+  addedAt: number;
+  visible: boolean;
+  _filtered?: boolean;
+}
 
 export const Parsers = (() => {
 
   // ── Haversine distance (metres) ──────────────────────────────
-  function haversine(lat1, lon1, lat2, lon2) {
+  function haversine(lat1: number, lon1: number, lat2: number, lon2: number): number {
     const R  = 6371000;
     const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180;
     const Δφ = (lat2 - lat1) * Math.PI / 180;
@@ -29,7 +58,7 @@ export const Parsers = (() => {
   }
 
   // ── Compute derivative fields (dist, speed, gradient) ────────
-  function enrichPoints(pts) {
+  function enrichPoints(pts: TrackPoint[]): TrackPoint[] {
     let cumDist = 0;
     for (let i = 0; i < pts.length; i++) {
       const p = pts[i];
@@ -52,7 +81,7 @@ export const Parsers = (() => {
       // Gradient (%)
       if (i > 0) {
         const prev = pts[i-1];
-        const dDist = p.dist - prev.dist;
+        const dDist = (p.dist || 0) - (prev.dist || 0);
         if (dDist > 0.1 && p.ele != null && prev.ele != null) {
           p.gradient = ((p.ele - prev.ele) / dDist) * 100;
         } else {
@@ -66,9 +95,8 @@ export const Parsers = (() => {
   }
 
   // ── Compute stats ─────────────────────────────────────────────
-  function computeStats(pts) {
-    if (!pts.length) return {};
-    const stats = {
+  function computeStats(pts: TrackPoint[]): TrackStats {
+    const stats: TrackStats = {
       totalDist: 0, elevGain: 0, elevLoss: 0,
       duration: null,
       avgSpeed: null, maxSpeed: 0,
@@ -76,7 +104,10 @@ export const Parsers = (() => {
       avgHR: null,    maxHR: 0,
       avgCadence: null,
       sensors: [],
+      startTime: pts.length ? pts[0].time : null,
     };
+
+    if (!pts.length) return stats;
 
     let powerSum = 0, powerN = 0;
     let hrSum = 0,    hrN = 0;
@@ -107,8 +138,10 @@ export const Parsers = (() => {
     stats.avgCadence = cadN   ? Math.round(cadSum   / cadN)   : null;
     stats.avgSpeed   = speedN ? speedSum / speedN             : null;
 
-    if (pts[0].time && pts[pts.length-1].time) {
-      stats.duration = pts[pts.length-1].time - pts[0].time;
+    const t0 = pts[0].time;
+    const t1 = pts[pts.length-1].time;
+    if (t0 != null && t1 != null) {
+      stats.duration = t1 - t0;
     }
 
     if (hrN) stats.sensors.push('Heart Rate');
@@ -120,7 +153,7 @@ export const Parsers = (() => {
   }
 
   // ── GPX parser ────────────────────────────────────────────────
-  function parseGPX(buf) {
+  function parseGPX(buf: ArrayBuffer): any {
     const text = new TextDecoder().decode(buf);
     const doc  = new DOMParser().parseFromString(text, 'application/xml');
 
@@ -133,7 +166,7 @@ export const Parsers = (() => {
     // Track name
     let name = 'Unnamed Track';
     const nameEl = doc.querySelector('trk > name, gpx > metadata > name');
-    if (nameEl) name = nameEl.textContent.trim();
+    if (nameEl) name = nameEl.textContent?.trim() || name;
 
     // Device / Creator
     const device = doc.documentElement.getAttribute('creator') || null;
@@ -142,39 +175,43 @@ export const Parsers = (() => {
     const trkpts = Array.from(doc.querySelectorAll('trkpt'));
     if (!trkpts.length) throw new Error('No track points found in GPX');
 
-    const points = trkpts.map(el => {
-      const lat  = parseFloat(el.getAttribute('lat'));
-      const lon  = parseFloat(el.getAttribute('lon'));
-      const ele  = parseFloat(el.querySelector('ele')?.textContent);
+    const points: TrackPoint[] = trkpts.map(el => {
+      const lat  = parseFloat(el.getAttribute('lat') || '0');
+      const lon  = parseFloat(el.getAttribute('lon') || '0');
+      const eleStr = el.querySelector('ele')?.textContent;
+      const ele  = eleStr ? parseFloat(eleStr) : null;
       const timeStr = el.querySelector('time')?.textContent;
       const time = timeStr ? new Date(timeStr).getTime() : null;
 
       // Extensions – try multiple schemas
       const hr  = parseFloat(
         el.querySelector('hr, HeartRateBpm Value, gpxtpx\\:hr, [localName=hr]')?.textContent
-        ?? el.getElementsByTagNameNS(ns.tpx, 'hr')[0]?.textContent
+        || el.getElementsByTagNameNS(ns.tpx, 'hr')[0]?.textContent
+        || ''
       ) || null;
 
       const cad = parseFloat(
         el.querySelector('cad, cadence, gpxtpx\\:cad, [localName=cad]')?.textContent
-        ?? el.getElementsByTagNameNS(ns.tpx, 'cad')[0]?.textContent
+        || el.getElementsByTagNameNS(ns.tpx, 'cad')[0]?.textContent
+        || ''
       ) || null;
 
       const temp = parseFloat(
         el.querySelector('atemp, temperature, gpxtpx\\:atemp, [localName=atemp]')?.textContent
-        ?? el.getElementsByTagNameNS(ns.tpx, 'atemp')[0]?.textContent
+        || el.getElementsByTagNameNS(ns.tpx, 'atemp')[0]?.textContent
+        || ''
       ) || null;
 
       // Power: <power> or <PowerInWatts> inside extensions
-      let power = null;
+      let power: number | null = null;
       const pwEl = el.querySelector('power, PowerInWatts');
-      if (pwEl) power = parseFloat(pwEl.textContent) || null;
+      if (pwEl) power = parseFloat(pwEl.textContent || '') || null;
       if (!power) {
         const pwNs = el.getElementsByTagNameNS(ns.tpx, 'PowerInWatts')[0];
-        if (pwNs) power = parseFloat(pwNs.textContent) || null;
+        if (pwNs) power = parseFloat(pwNs.textContent || '') || null;
       }
 
-      return { lat, lon, ele: isNaN(ele) ? null : ele, time, hr, cad, power, speed: null, temp };
+      return { lat, lon, ele: (ele != null && isNaN(ele)) ? null : ele, time, hr, cad, power, speed: null, temp };
     });
 
     const pts   = enrichPoints(points);
@@ -183,41 +220,44 @@ export const Parsers = (() => {
   }
 
   // ── TCX parser ────────────────────────────────────────────────
-  function parseTCX(buf) {
+  function parseTCX(buf: ArrayBuffer): any {
     const text = new TextDecoder().decode(buf);
     const doc  = new DOMParser().parseFromString(text, 'application/xml');
 
     let name = 'Unnamed Track';
     const idEl = doc.querySelector('Activity > Id');
-    if (idEl) name = idEl.textContent.trim().replace('T', ' ').substring(0, 19);
+    if (idEl) name = (idEl.textContent?.trim() || '').replace('T', ' ').substring(0, 19);
 
     const nameEl = doc.querySelector('Activity > Notes, Activity > Name');
-    if (nameEl) name = nameEl.textContent.trim();
+    if (nameEl) name = nameEl.textContent?.trim() || name;
 
     // Device
     const deviceEl = doc.querySelector('Creator > Name');
-    const device = deviceEl ? deviceEl.textContent.trim() : null;
+    const device = deviceEl ? deviceEl.textContent?.trim() || null : null;
 
     const tpts = Array.from(doc.querySelectorAll('Trackpoint'));
     if (!tpts.length) throw new Error('No trackpoints found in TCX');
 
-    const points = tpts.map(el => {
-      const lat = parseFloat(el.querySelector('LatitudeDegrees')?.textContent);
-      const lon = parseFloat(el.querySelector('LongitudeDegrees')?.textContent);
+    const points: TrackPoint[] = tpts.map(el => {
+      const latStr = el.querySelector('LatitudeDegrees')?.textContent;
+      const lonStr = el.querySelector('LongitudeDegrees')?.textContent;
+      const lat = latStr ? parseFloat(latStr) : NaN;
+      const lon = lonStr ? parseFloat(lonStr) : NaN;
       if (isNaN(lat) || isNaN(lon)) return null;
 
-      const ele  = parseFloat(el.querySelector('AltitudeMeters')?.textContent);
+      const eleStr = el.querySelector('AltitudeMeters')?.textContent;
+      const ele  = eleStr ? parseFloat(eleStr) : null;
       const timeStr = el.querySelector('Time')?.textContent;
       const time = timeStr ? new Date(timeStr).getTime() : null;
-      const hr   = parseFloat(el.querySelector('HeartRateBpm Value, HeartRateBpm > Value')?.textContent) || null;
-      const cad  = parseFloat(el.querySelector('Cadence')?.textContent) || null;
+      const hr   = parseFloat(el.querySelector('HeartRateBpm Value, HeartRateBpm > Value')?.textContent || '') || null;
+      const cad  = parseFloat(el.querySelector('Cadence')?.textContent || '') || null;
 
       // Extensions (Garmin ActivityExtension v2)
-      const speed = parseFloat(el.querySelector('Speed, ns3\\:Speed, Extensions Speed')?.textContent) || null;
-      const power = parseFloat(el.querySelector('Watts, ns3\\:Watts, Extensions Watts')?.textContent) || null;
+      const speed = parseFloat(el.querySelector('Speed, ns3\\:Speed, Extensions Speed')?.textContent || '') || null;
+      const power = parseFloat(el.querySelector('Watts, ns3\\:Watts, Extensions Watts')?.textContent || '') || null;
 
-      return { lat, lon, ele: isNaN(ele) ? null : ele, time, hr, cad, power, speed, temp: null };
-    }).filter(Boolean);
+      return { lat, lon, ele: (ele != null && isNaN(ele)) ? null : ele, time, hr, cad, power, speed, temp: null } as TrackPoint;
+    }).filter((p): p is TrackPoint => p !== null);
 
     if (!points.length) throw new Error('No valid trackpoints (with lat/lon) in TCX');
     const pts   = enrichPoints(points);
@@ -226,14 +266,14 @@ export const Parsers = (() => {
   }
 
   // ── FIT parser ────────────────────────────────────────────────
-  function parseFIT(buf) {
+  function parseFIT(buf: ArrayBuffer): Promise<any> {
     return new Promise((resolve, reject) => {
       if (typeof FitParser === 'undefined') {
         reject(new Error('FIT parser not loaded. Check your connection.'));
         return;
       }
       const fit = new FitParser({ force: true, speedUnit: 'km/h', lengthUnit: 'm', temperatureUnit: 'celsius', elapsedRecordField: false, mode: 'cascade' });
-      fit.parse(buf, (err, data) => {
+      fit.parse(buf, (err: any, data: any) => {
         if (err) { reject(new Error('FIT parse error: ' + err)); return; }
         try {
           let name = 'FIT Activity';
@@ -251,7 +291,7 @@ export const Parsers = (() => {
           }
 
           // Collect all records across laps
-          const allRecords = [];
+          const allRecords: any[] = [];
           for (const session of sessions) {
             for (const lap of (session.laps || [])) {
               for (const rec of (lap.records || [])) {
@@ -271,7 +311,7 @@ export const Parsers = (() => {
             name += ' ' + d.toISOString().slice(0,10);
           }
 
-          const points = allRecords.map(r => {
+          const points: (TrackPoint | null)[] = allRecords.map(r => {
             const lat = r.position_lat;
             const lon = r.position_long;
             if (lat == null || lon == null) return null;
@@ -287,11 +327,12 @@ export const Parsers = (() => {
               speed,
               temp:  r.temperature ?? null,
             };
-          }).filter(Boolean);
+          });
+          const validPoints = points.filter((p): p is TrackPoint => p !== null);
 
-          if (!points.length) { reject(new Error('FIT file has no GPS points')); return; }
+          if (!validPoints.length) { reject(new Error('FIT file has no GPS points')); return; }
 
-          const pts   = enrichPoints(points);
+          const pts   = enrichPoints(validPoints);
           const stats = computeStats(pts);
           resolve({ name, device, format: 'fit', points: pts, stats });
         } catch(ex) {
@@ -302,21 +343,21 @@ export const Parsers = (() => {
   }
 
   // ── KML parser ────────────────────────────────────────────────
-  function parseKML(buf) {
+  function parseKML(buf: ArrayBuffer): any {
     const text = new TextDecoder().decode(buf);
     const doc  = new DOMParser().parseFromString(text, 'application/xml');
 
     let name = 'Unnamed Track';
     const nameEl = doc.querySelector('Document > name, Placemark > name');
-    if (nameEl) name = nameEl.textContent.trim();
+    if (nameEl) name = nameEl.textContent?.trim() || name;
 
     // Track: look for gx:Track or LineString
     const coordEls = doc.querySelectorAll('coordinates');
     if (!coordEls.length) throw new Error('No coordinates found in KML');
 
-    const points = [];
+    const points: TrackPoint[] = [];
     coordEls.forEach(el => {
-      const lines = el.textContent.trim().split(/\s+/);
+      const lines = el.textContent?.trim().split(/\s+/) || [];
       lines.forEach(line => {
         const parts = line.split(',');
         if (parts.length < 2) return;
@@ -324,7 +365,7 @@ export const Parsers = (() => {
         const lat = parseFloat(parts[1]);
         const ele = parts.length > 2 ? parseFloat(parts[2]) : null;
         if (isNaN(lat) || isNaN(lon)) return;
-        points.push({ lat, lon, ele: isNaN(ele) ? null : ele, time: null, hr: null, cad: null, power: null, speed: null, temp: null });
+        points.push({ lat, lon, ele: (ele != null && isNaN(ele)) ? null : ele, time: null, hr: null, cad: null, power: null, speed: null, temp: null });
       });
     });
 
@@ -335,8 +376,8 @@ export const Parsers = (() => {
   }
 
   // ── Public: dispatch by extension ────────────────────────────
-  async function parseFile(file) {
-    const ext = file.name.split('.').pop().toLowerCase();
+  async function parseFile(file: File): Promise<any> {
+    const ext = file.name.split('.').pop()?.toLowerCase();
     const buf = await file.arrayBuffer();
     switch (ext) {
       case 'gpx': return parseGPX(buf);
