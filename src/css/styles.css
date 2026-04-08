@@ -466,6 +466,31 @@ button {
   color: var(--text-muted);
 }
 
+.track-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+  overflow: hidden;
+  max-height: 32px;
+}
+
+.track-tag {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  padding: 1px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.track-item.selected .track-tag {
+  border-color: rgba(255, 255, 255, 0.1);
+  color: var(--text-muted);
+}
+
 #sidebar-resizer {
   width: 4px;
   cursor: col-resize;
@@ -1114,7 +1139,7 @@ body.dragging-sidebar {
   font-size: var(--is-s);
 }
 .map-color-btn.active {
-  color: var(--accent);
+  color: var(--chart-color, var(--accent));
 }
 
 .cur-y-val {

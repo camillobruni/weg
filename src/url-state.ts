@@ -13,6 +13,7 @@ export interface AppState {
   f_dist?: (number | null)[];
   f_dur?: (number | null)[];
   f_mets?: string[];
+  f_tags?: string[];
   q?: string;
   re?: boolean;
   sort?: string;
@@ -53,6 +54,7 @@ export const UrlState = (() => {
         .split(',')
         .map((v) => (v ? Number(v) : null));
     if (p.has('f_mets')) s.f_mets = p.get('f_mets')!.split(',');
+    if (p.has('f_tags')) s.f_tags = p.get('f_tags')!.split(',');
 
     if (p.has('q')) s.q = p.get('q')!;
     if (p.has('re')) s.re = p.get('re') === '1';
@@ -116,6 +118,9 @@ export const UrlState = (() => {
       }
       if (_state.f_mets) {
         search += (search ? '&' : '') + 'f_mets=' + _state.f_mets.join(',');
+      }
+      if (_state.f_tags) {
+        search += (search ? '&' : '') + 'f_tags=' + _state.f_tags.join(',');
       }
 
       if (_state.map_pos) {

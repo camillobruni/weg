@@ -64,6 +64,11 @@ export function renderInsights(track: TrackData) {
   if (s.powerZones) {
     const card = document.createElement('div');
     card.className = 'insight-card';
+    const metricKey = 'power';
+    const color = '#F7DC6F';
+    card.style.setProperty('--chart-color', color);
+    const isMapColored = ChartView.getMapColorMetric() === metricKey;
+
     const totalTime = s.powerZones.reduce((a, b) => a + b, 0);
     const ftp = Parsers.getFTP();
     const zoneNames = [
@@ -104,8 +109,13 @@ export function renderInsights(track: TrackData) {
 
     card.innerHTML = `
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px">
-        <div class="insight-title" style="margin-bottom:0">
-          <span class="material-symbols-rounded" style="color:#F7DC6F">bolt</span>Power Zones
+        <div style="display:flex; align-items:center; gap:8px">
+          <div class="insight-title" style="margin-bottom:0">
+            <span class="material-symbols-rounded" style="color:${color}">bolt</span>Power Zones
+          </div>
+          <button class="map-color-btn icon-btn mini ${isMapColored ? 'active' : ''}" data-metric="${metricKey}" title="Color map by this metric">
+            <span class="material-symbols-rounded" style="font-size:16px">colorize</span>
+          </button>
         </div>
         <button class="icon-btn mini btn-pw-settings" title="Configure FTP">
           <span class="material-symbols-rounded" style="font-size:16px">settings</span>
@@ -114,6 +124,16 @@ export function renderInsights(track: TrackData) {
       <div style="padding: 5px 0">${zonesHtml}</div>
     `;
     grid.appendChild(card);
+
+    card.querySelector('.map-color-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      ChartView.toggleMapColor(metricKey);
+      const current = ChartView.getMapColorMetric();
+      grid.querySelectorAll('.map-color-btn').forEach((btn) => {
+        const b = btn as HTMLElement;
+        b.classList.toggle('active', b.dataset.metric === current);
+      });
+    });
 
     card.querySelector('.btn-pw-settings')?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -124,6 +144,11 @@ export function renderInsights(track: TrackData) {
   if (s.hrZones) {
     const card = document.createElement('div');
     card.className = 'insight-card';
+    const metricKey = 'hr';
+    const color = '#FF6B6B';
+    card.style.setProperty('--chart-color', color);
+    const isMapColored = ChartView.getMapColorMetric() === metricKey;
+
     const totalTime = s.hrZones.reduce((a, b) => a + b, 0);
     const thresholds = Parsers.getHRZones();
     const zoneNames = ['Recovery', 'Aerobic', 'Tempo', 'Threshold', 'Anaerobic'];
@@ -156,8 +181,13 @@ export function renderInsights(track: TrackData) {
 
     card.innerHTML = `
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px">
-        <div class="insight-title" style="margin-bottom:0">
-          <span class="material-symbols-rounded" style="color:#FF6B6B">favorite</span>Heart Rate Zones
+        <div style="display:flex; align-items:center; gap:8px">
+          <div class="insight-title" style="margin-bottom:0">
+            <span class="material-symbols-rounded" style="color:${color}">favorite</span>Heart Rate Zones
+          </div>
+          <button class="map-color-btn icon-btn mini ${isMapColored ? 'active' : ''}" data-metric="${metricKey}" title="Color map by this metric">
+            <span class="material-symbols-rounded" style="font-size:16px">colorize</span>
+          </button>
         </div>
         <button class="icon-btn mini btn-hr-settings" title="Configure HR Zones">
           <span class="material-symbols-rounded" style="font-size:16px">settings</span>
@@ -166,6 +196,16 @@ export function renderInsights(track: TrackData) {
       <div style="padding: 5px 0">${zonesHtml}</div>
     `;
     grid.appendChild(card);
+
+    card.querySelector('.map-color-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      ChartView.toggleMapColor(metricKey);
+      const current = ChartView.getMapColorMetric();
+      grid.querySelectorAll('.map-color-btn').forEach((btn) => {
+        const b = btn as HTMLElement;
+        b.classList.toggle('active', b.dataset.metric === current);
+      });
+    });
 
     card.querySelector('.btn-hr-settings')?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -241,6 +281,7 @@ function renderCurveCard(opts: CurveCardOptions) {
 
   const card = document.createElement('div');
   card.className = 'insight-card';
+  card.style.setProperty('--chart-color', color);
   card.innerHTML = `
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px">
       <div style="display:flex; align-items:center; gap:8px">

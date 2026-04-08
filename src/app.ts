@@ -7,7 +7,7 @@ import { UrlState } from './url-state';
 import { Parsers, TrackData, TrackPoint } from './parsers';
 import { MapView } from './map';
 import { ChartView } from './charts';
-import { renderDetails } from './tabs/details';
+import { renderDetails, initDetails } from './tabs/details';
 import { renderInsights, initInsights } from './tabs/insights';
 import { fmtSecs, escHtml, fmtDate } from './utils';
 
@@ -42,6 +42,7 @@ interface Filters {
   dist: [number | null, number | null];
   dur: [number | null, number | null];
   metrics: Set<string>;
+  tags: string[];
 }
 
 let filters: Filters = {
@@ -49,6 +50,7 @@ let filters: Filters = {
   dist: [null, null],
   dur: [null, null],
   metrics: new Set<string>(),
+  tags: [],
 };
 
 function syncFiltersToUrl() {
@@ -57,6 +59,7 @@ function syncFiltersToUrl() {
     f_dist: filters.dist.every((v) => v === null) ? null : filters.dist,
     f_dur: filters.dur.every((v) => v === null) ? null : filters.dur,
     f_mets: filters.metrics.size === 0 ? null : Array.from(filters.metrics),
+    f_tags: filters.tags.length === 0 ? null : filters.tags,
   });
 }
 
@@ -67,22 +70,22 @@ function syncMetricsToUrl() {
   UrlState.patch({ metrics: abbrs.length ? abbrs : null });
 }
 
+const SORT_OPTIONS = [
+  { label: 'Newest first', val: 'date-desc', icon: 'calendar_today' },
+  { label: 'Oldest first', val: 'date-asc', icon: 'history' },
+  { label: 'Longest distance', val: 'dist-desc', icon: 'straighten' },
+  { label: 'Shortest distance', val: 'dist-asc', icon: 'horizontal_rule' },
+  { label: 'Longest duration', val: 'dur-desc', icon: 'timer' },
+  { label: 'Shortest duration', val: 'dur-asc', icon: 'timer_off' },
+];
+
 function showSortMenu(anchorEl: HTMLElement) {
   document.querySelectorAll('.sort-menu-popup').forEach((el) => el.remove());
 
   const popup = document.createElement('div');
   popup.className = 'sort-menu-popup';
 
-  const options = [
-    { label: 'Newest first', val: 'date-desc', icon: 'calendar_today' },
-    { label: 'Oldest first', val: 'date-asc', icon: 'history' },
-    { label: 'Longest distance', val: 'dist-desc', icon: 'straighten' },
-    { label: 'Shortest distance', val: 'dist-asc', icon: 'horizontal_rule' },
-    { label: 'Longest duration', val: 'dur-desc', icon: 'timer' },
-    { label: 'Shortest duration', val: 'dur-asc', icon: 'timer_off' },
-  ];
-
-  options.forEach((opt) => {
+  SORT_OPTIONS.forEach((opt) => {
     const item = document.createElement('div');
     item.className = `menu-item ${currentSort === opt.val ? 'active' : ''}`;
     item.innerHTML = `
@@ -93,6 +96,7 @@ function showSortMenu(anchorEl: HTMLElement) {
     item.addEventListener('click', () => {
       currentSort = opt.val;
       UrlState.patch({ sort: currentSort });
+      updateSearchSortUI();
       renderTrackList();
       popup.remove();
     });
@@ -211,7 +215,7 @@ document.addEventListener('click', (e) => {
   }
 
   if (btn.dataset.tab === 'details' && selectedId && tracks[selectedId]) {
-    renderDetails(tracks[selectedId]);
+    renderDetails(tracks[selectedId], getGlobalTags());
   }
 
   if (btn.dataset.tab === 'insights' && selectedId && tracks[selectedId]) {
@@ -235,6 +239,10 @@ async function init() {
   const urlState = UrlState.get();
 
   initInsights(showToast);
+  initDetails(() => {
+    applyFilters();
+    syncFiltersToUrl();
+  });
 
   // Init sub-systems
   MapView.init((id) => selectTrack(id), onMapMove, onMapPointClick, onMapDblClick);
@@ -305,6 +313,8 @@ async function init() {
   if (urlState.f_dist) filters.dist = urlState.f_dist.map((v) => (v === 0 ? 0 : v || null)) as [number | null, number | null];
   if (urlState.f_dur) filters.dur = urlState.f_dur.map((v) => (v === 0 ? 0 : v || null)) as [number | null, number | null];
   if (urlState.f_mets) filters.metrics = new Set(urlState.f_mets);
+  if (urlState.f_tags) filters.tags = urlState.f_tags;
+
   updateFilterUI();
 
   if (urlState.q) searchQuery = urlState.q;
@@ -518,8 +528,15 @@ async function init() {
   });
 
   document.getElementById('btn-reset-filters')?.addEventListener('click', () => {
-    filters = { date: [null, null], dist: [null, null], dur: [null, null], metrics: new Set() };
+    filters = { date: [null, null], dist: [null, null], dur: [null, null], metrics: new Set(), tags: [] };
     updateFilterUI();
+    applyFilters();
+    syncFiltersToUrl();
+  });
+
+  document.getElementById('filter-tags')?.addEventListener('input', (e) => {
+    const val = (e.target as HTMLInputElement).value;
+    filters.tags = val.split(',').map(s => s.trim().toLowerCase()).filter(s => !!s);
     applyFilters();
     syncFiltersToUrl();
   });
@@ -675,11 +692,17 @@ function applyFilters() {
     if (visible && filters.metrics.size > 0) {
       for (const m of filters.metrics) {
         const field = ChartView.METRICS[m].field;
-        if (!t.points.some((p) => p[field] != null)) {
+        if (!t.points.some((p: any) => p[field] != null)) {
           visible = false;
           break;
         }
       }
+    }
+
+    // Tags filter
+    if (visible && filters.tags.length > 0) {
+      const trackTags = t.tags || [];
+      if (!filters.tags.every((ft) => trackTags.includes(ft))) visible = false;
     }
 
     t._filtered = !visible;
@@ -700,6 +723,8 @@ function updateFilterUI() {
     filters.dur[0] !== null ? String(filters.dur[0]) : '';
   (document.getElementById('filter-dur-max') as HTMLInputElement).value =
     filters.dur[1] !== null ? String(filters.dur[1]) : '';
+  (document.getElementById('filter-tags') as HTMLInputElement).value =
+    filters.tags.join(', ');
 
   document.querySelectorAll('#filter-metrics .mini-pill').forEach((el) => {
     const btn = el as HTMLElement;
@@ -713,7 +738,8 @@ function updateFilterUI() {
     (filters.dist[1] !== null ? 1 : 0) +
     (filters.dur[0] !== null ? 1 : 0) +
     (filters.dur[1] !== null ? 1 : 0) +
-    filters.metrics.size;
+    filters.metrics.size +
+    (filters.tags.length > 0 ? 1 : 0);
 
   const badge = document.querySelector('#btn-toggle-filters .btn-badge');
   if (badge) {
@@ -726,6 +752,14 @@ function updateSearchSortUI() {
   const searchInput = document.getElementById('track-search') as HTMLInputElement;
   if (searchInput) searchInput.value = searchQuery;
   document.getElementById('btn-regex-toggle')?.classList.toggle('active', searchRegex);
+
+  const opt = SORT_OPTIONS.find((o) => o.val === currentSort);
+  if (opt) {
+    const labelEl = document.getElementById('sort-current-label');
+    const iconEl = document.getElementById('sort-current-icon');
+    if (labelEl) labelEl.textContent = opt.label.replace(' first', '').replace(' distance', '').replace(' duration', '');
+    if (iconEl) iconEl.textContent = opt.icon;
+  }
 }
 
 function renderTrackList() {
@@ -783,6 +817,14 @@ function renderTrackList() {
     });
 }
 
+function getGlobalTags(): string[] {
+  const all = new Set<string>();
+  Object.values(tracks).forEach(t => {
+    (t.tags || []).forEach(tag => all.add(tag));
+  });
+  return Array.from(all).sort();
+}
+
 function buildTrackItem(track: TrackData) {
   const item = document.createElement('div');
   item.className = 'track-item' + (track.id === selectedId ? ' selected' : '');
@@ -793,6 +835,10 @@ function buildTrackItem(track: TrackData) {
       ? fmtDate(track.points[0].time)
       : 'Unknown date';
 
+  const tagsHtml = (track.tags || []).length > 0 
+    ? `<div class="track-tags">${(track.tags || []).map(t => `<span class="track-tag">${escHtml(t)}</span>`).join('')}</div>`
+    : '';
+
   item.innerHTML = `
     <div class="track-color" style="background:${track.color}"></div>
     <div class="track-info">
@@ -802,6 +848,7 @@ function buildTrackItem(track: TrackData) {
         <span>${(track.stats.totalDist / 1000).toFixed(1)} km</span>
         <span class="badge">${track.format.toUpperCase()}</span>
       </div>
+      ${tagsHtml}
     </div>
     <button class="icon-btn mini toggle-vis" title="Toggle visibility">
       <span class="material-symbols-rounded">${track.visible ? 'visibility' : 'visibility_off'}</span>
@@ -849,7 +896,7 @@ function selectTrack(id: string, fit = true) {
   // Render details
   const activeTabBtn = document.querySelector('.tab-btn.active') as HTMLElement;
   const activeTab = activeTabBtn ? activeTabBtn.dataset.tab : 'graphs';
-  if (activeTab === 'details') renderDetails(tracks[id]);
+  if (activeTab === 'details') renderDetails(tracks[id], getGlobalTags());
   if (activeTab === 'insights') renderInsights(tracks[id]);
 
   // Tell sub-views

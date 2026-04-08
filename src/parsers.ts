@@ -46,6 +46,7 @@ export interface TrackData {
   color: string;
   addedAt: number;
   visible: boolean;
+  tags?: string[];
   _filtered?: boolean;
 }
 
