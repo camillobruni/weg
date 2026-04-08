@@ -2440,6 +2440,7 @@ export const ChartView = (() => {
     isDragging: () => isDragging,
     setMapColorChangeCb,
     toggleMapColor,
+    getMapColorMetric: () => mapColorMetric,
     getActiveMetrics: () => activeMetrics,
     getAvailableMetrics: () => availableMetrics,
     setActiveMetrics,

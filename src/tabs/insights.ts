@@ -4,13 +4,9 @@ import uPlot from 'uplot';
 import { TrackData, Parsers } from '../parsers';
 import { Storage } from '../storage';
 import { MapView } from '../map';
+import { ChartView } from '../charts';
 import { UrlState } from '../url-state';
-import { fmtSecs, escHtml } from '../utils';
-
-// We need a reference to the showToast function, which is currently in app.ts.
-// For now, we'll assume it's passed in or globally available, but better to move it to utils too.
-// Actually, let's import it from app.ts if possible, or just move it to utils.
-// Moving showToast to utils is better.
+import { fmtSecs, escHtml, fmtDuration } from '../utils';
 
 let toastFn: (msg: string, type?: string) => void = () => {};
 export function initInsights(showToast: (msg: string, type?: string) => void) {
@@ -22,7 +18,7 @@ export function renderInsights(track: TrackData) {
   if (!container) return;
 
   const s = track.stats;
-  if (!s.powerCurve && !s.hrZones) {
+  if (!s.powerCurve && !s.hrZones && !s.hrCurve) {
     container.innerHTML = `
       <div class="empty-state">
         <span class="material-symbols-rounded empty-icon">analytics</span>
@@ -40,175 +36,64 @@ export function renderInsights(track: TrackData) {
   if (!grid) return;
 
   if (s.powerCurve) {
-    const card = document.createElement('div');
-    card.className = 'insight-card';
-    card.innerHTML = `
-      <div class="insight-title">
-        <span class="material-symbols-rounded" style="color:#F7DC6F">bolt</span>Power Curve
-      </div>
-      <div id="power-curve-chart" class="insight-chart-container"></div>
-      <table class="power-curve-table">
-        <thead>
-          <tr>
-            <th>Duration</th>
-            <th style="text-align:right">Peak Power</th>
-            <th style="width:32px"></th>
-          </tr>
-        </thead>
-        <tbody id="power-curve-tbody"></tbody>
-      </table>
-    `;
-    grid.appendChild(card);
-
-    // Populate table
-    const tbody = card.querySelector('#power-curve-tbody');
-    const curve = s.powerCurve;
-    const durations = Object.keys(curve)
-      .map(Number)
-      .sort((a, b) => a - b);
-
-    durations.forEach((d) => {
-      const entry = curve[d];
-      const row = document.createElement('tr');
-      const label = d < 60 ? `${d}s` : d < 3600 ? `${d / 60}m` : `${d / 3600}h`;
-      row.innerHTML = `
-        <td>${label}</td>
-        <td class="power-curve-val">${entry.power} W</td>
-        <td style="text-align:right">
-          <button class="icon-btn mini btn-show-peak" title="Highlight on Map" data-idx="${entry.idx}" data-len="${d}">
-            <span class="material-symbols-rounded" style="font-size:14px">visibility</span>
-          </button>
-        </td>
-      `;
-      tbody?.appendChild(row);
+    renderCurveCard({
+      grid,
+      track,
+      curve: s.powerCurve,
+      metricKey: 'power',
+      label: 'Power Curve',
+      unit: 'W',
+      color: '#F7DC6F',
+      icon: 'bolt',
     });
+  }
 
-    tbody?.querySelectorAll('.btn-show-peak').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        const b = e.currentTarget as HTMLElement;
-        const startIdx = parseInt(b.dataset.idx!);
-        const duration = parseInt(b.dataset.len!);
-        const pts = track.points;
-        const endIdx = Math.min(pts.length - 1, startIdx + duration - 1);
-
-        const t0 = pts[0].time || 0;
-        const tMin = ((pts[startIdx].time || t0) - t0) / 1000;
-        const tMax = ((pts[endIdx].time || t0) - t0) / 1000;
-
-        UrlState.patch({ sel: [tMin, tMax] });
-        MapView.highlightSegment(track.id, pts, startIdx, endIdx, true);
-        toastFn(`Highlighted ${duration}s peak power segment`);
-      });
+  if (s.hrCurve) {
+    renderCurveCard({
+      grid,
+      track,
+      curve: s.hrCurve,
+      metricKey: 'hr',
+      label: 'Heart Rate Curve',
+      unit: 'bpm',
+      color: '#FF6B6B',
+      icon: 'favorite',
     });
-
-    // Render Chart
-    const chartEl = card.querySelector('#power-curve-chart') as HTMLElement;
-    if (chartEl) {
-      const xData = durations;
-      const yData = durations.map((d) => curve[d].power);
-
-      const curYVal = document.createElement('div');
-      curYVal.className = 'cur-y-val';
-      curYVal.style.cssText = 'color:#F7DC6F;display:none;border-color:#F7DC6F44';
-      chartEl.style.position = 'relative';
-      chartEl.appendChild(curYVal);
-
-      const opts: uPlot.Options = {
-        id: 'power-curve',
-        width: 0, // Will be set by ResizeObserver
-        height: 250,
-        padding: [10, 10, 0, 10],
-        scales: {
-          x: { time: false, distr: 3, auto: true },
-          y: { auto: true },
-        },
-        series: [
-          {},
-          {
-            label: 'Power',
-            stroke: '#F7DC6F',
-            width: 2,
-            fill: 'rgba(247, 220, 111, 0.1)',
-            points: { show: true, size: 5, fill: '#F7DC6F' },
-          },
-        ],
-        axes: [
-          {
-            stroke: '#555564',
-            grid: { stroke: '#2e2e34', width: 1 },
-            space: 100,
-            splits: [1, 5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600].filter(d => d <= xData[xData.length - 1]),
-            values: (_u, vals) =>
-              vals.map((v) => {
-                if (v < 60) return `${v}s`;
-                if (v < 3600) return `${v / 60}m`;
-                return `${v / 3600}h`;
-              }),
-          },
-          {
-            stroke: '#555564',
-            grid: { stroke: '#2e2e34', width: 1 },
-            values: (_u, vals) => vals.map((v) => `${v}W`),
-          },
-        ],
-        cursor: {
-          drag: { x: false, y: false },
-          dataIdx: (u, seriesIdx, dataIdx) => dataIdx,
-        },
-        hooks: {
-          setCursor: [
-            (u: uPlot) => {
-              const idx = u.cursor.idx;
-              if (idx != null && yData[idx] != null) {
-                const cx = u.valToPos(xData[idx], 'x', false);
-                const cy = u.valToPos(yData[idx], 'y', false);
-                curYVal.innerHTML = `${yData[idx]} W`;
-                curYVal.style.transform = `translate(${cx}px, ${cy}px) translate(6px, -50%)`;
-                curYVal.style.display = '';
-              } else {
-                curYVal.style.display = 'none';
-              }
-            }
-          ]
-        },
-        legend: { show: false },
-      };
-
-      // Ensure chart has width before creating
-      const obs = new ResizeObserver(() => {
-        if (chartEl.clientWidth > 0) {
-          opts.width = chartEl.clientWidth;
-          new uPlot(opts, [xData, yData], chartEl);
-          obs.disconnect();
-        }
-      });
-      obs.observe(chartEl);
-    }
   }
 
   if (s.powerZones) {
     const card = document.createElement('div');
     card.className = 'insight-card';
     const totalTime = s.powerZones.reduce((a, b) => a + b, 0);
-    const zoneLabels = [
-      'Active Recovery (Z1)',
-      'Endurance (Z2)',
-      'Tempo (Z3)',
-      'Threshold (Z4)',
-      'VO2 Max (Z5)',
-      'Anaerobic (Z6)',
-      'Neuromuscular (Z7)',
+    const ftp = Parsers.getFTP();
+    const zoneNames = [
+      'Active Recovery',
+      'Endurance',
+      'Tempo',
+      'Threshold',
+      'VO2 Max',
+      'Anaerobic',
+      'Neuromuscular',
     ];
+    // Coggan % thresholds: 0, 55, 75, 90, 105, 120, 150
+    const thresholds = [0, 0.55, 0.75, 0.9, 1.05, 1.2, 1.5].map(t => Math.round(t * ftp));
     const zoneColors = ['#82E0AA', '#A8C8A0', '#F7DC6F', '#F8C471', '#F39C12', '#E67E22', '#C0392B'];
 
     let zonesHtml = '';
     s.powerZones.forEach((time, i) => {
       const pct = totalTime > 0 ? (time / totalTime) * 100 : 0;
+      const rangeText = i < 6 
+        ? `${thresholds[i]} - ${thresholds[i+1]} W` 
+        : `> ${thresholds[i]} W`;
+
       zonesHtml += `
         <div style="margin-bottom:12px">
-          <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px">
-            <span style="font-weight:600; color:var(--text-muted)">${zoneLabels[i]}</span>
-            <span style="color:var(--text)">${fmtSecs(Math.round(time))} (${pct.toFixed(1)}%)</span>
+          <div style="display:flex; align-items:baseline; font-size:12px; margin-bottom:4px; gap:8px">
+            <span style="font-weight:800; color:var(--text); width:20px">Z${i+1}</span>
+            <span style="font-weight:600; color:var(--text-muted); flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${zoneNames[i]}</span>
+            <span style="color:var(--text-dim); width:80px; text-align:right; font-size:11px">${rangeText}</span>
+            <span style="color:var(--text); width:70px; text-align:right; font-variant-numeric: tabular-nums">${fmtSecs(Math.round(time))}</span>
+            <span style="color:var(--text-dim); width:45px; text-align:right; font-variant-numeric: tabular-nums; font-size:11px">${pct.toFixed(1)}%</span>
           </div>
           <div style="height:8px; background:var(--surface); border-radius:4px; overflow:hidden">
             <div style="height:100%; width:${pct}%; background:${zoneColors[i]}"></div>
@@ -240,17 +125,27 @@ export function renderInsights(track: TrackData) {
     const card = document.createElement('div');
     card.className = 'insight-card';
     const totalTime = s.hrZones.reduce((a, b) => a + b, 0);
-    const zoneLabels = ['Z1 (<120)', 'Z2 (120-140)', 'Z3 (140-160)', 'Z4 (160-180)', 'Z5 (>180)'];
+    const thresholds = Parsers.getHRZones();
+    const zoneNames = ['Recovery', 'Aerobic', 'Tempo', 'Threshold', 'Anaerobic'];
     const zoneColors = ['#82E0AA', '#F7DC6F', '#F8C471', '#FF6B6B', '#C0392B'];
 
     let zonesHtml = '';
     s.hrZones.forEach((time, i) => {
       const pct = totalTime > 0 ? (time / totalTime) * 100 : 0;
+      const rangeText = i === 0 
+        ? `< ${thresholds[0]} bpm` 
+        : i < 4 
+          ? `${thresholds[i-1]} - ${thresholds[i]} bpm` 
+          : `> ${thresholds[i-1]} bpm`;
+
       zonesHtml += `
         <div style="margin-bottom:12px">
-          <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px">
-            <span style="font-weight:600; color:var(--text-muted)">${zoneLabels[i]}</span>
-            <span style="color:var(--text)">${fmtSecs(Math.round(time))} (${pct.toFixed(1)}%)</span>
+          <div style="display:flex; align-items:baseline; font-size:12px; margin-bottom:4px; gap:8px">
+            <span style="font-weight:800; color:var(--text); width:20px">Z${i+1}</span>
+            <span style="font-weight:600; color:var(--text-muted); flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${zoneNames[i]}</span>
+            <span style="color:var(--text-dim); width:95px; text-align:right; font-size:11px">${rangeText}</span>
+            <span style="color:var(--text); width:70px; text-align:right; font-variant-numeric: tabular-nums">${fmtSecs(Math.round(time))}</span>
+            <span style="color:var(--text-dim); width:45px; text-align:right; font-variant-numeric: tabular-nums; font-size:11px">${pct.toFixed(1)}%</span>
           </div>
           <div style="height:8px; background:var(--surface); border-radius:4px; overflow:hidden">
             <div style="height:100%; width:${pct}%; background:${zoneColors[i]}"></div>
@@ -278,7 +173,6 @@ export function renderInsights(track: TrackData) {
     });
   }
 
-  // Climbing Analysis
   const climbingCard = document.createElement('div');
   climbingCard.className = 'insight-card';
   const distKm = s.totalDist / 1000;
@@ -309,7 +203,6 @@ export function renderInsights(track: TrackData) {
   `;
   grid.appendChild(climbingCard);
 
-  // Efficiency (if both power and HR exist)
   if (s.avgPower && s.avgHR) {
     const effCard = document.createElement('div');
     effCard.className = 'insight-card';
@@ -328,6 +221,274 @@ export function renderInsights(track: TrackData) {
       </div>
     `;
     grid.appendChild(effCard);
+  }
+}
+
+interface CurveCardOptions {
+  grid: HTMLElement;
+  track: TrackData;
+  curve: any;
+  metricKey: string;
+  label: string;
+  unit: string;
+  color: string;
+  icon: string;
+}
+
+function renderCurveCard(opts: CurveCardOptions) {
+  const { grid, track, curve, metricKey, label, unit, color, icon } = opts;
+  const isMapColored = ChartView.getMapColorMetric() === metricKey;
+
+  const card = document.createElement('div');
+  card.className = 'insight-card';
+  card.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px">
+      <div style="display:flex; align-items:center; gap:8px">
+        <div class="insight-title" style="margin-bottom:0">
+          <span class="material-symbols-rounded" style="color:${color}">${icon}</span>${label}
+        </div>
+        <button class="map-color-btn icon-btn mini ${isMapColored ? 'active' : ''}" data-metric="${metricKey}" title="Color map by this metric">
+          <span class="material-symbols-rounded" style="font-size:16px">colorize</span>
+        </button>
+      </div>
+      <button class="icon-btn mini btn-toggle-table" title="Toggle Data Table">
+        <span class="material-symbols-rounded" style="font-size:18px">expand_more</span>
+      </button>
+    </div>
+    <div id="${metricKey}-curve-chart" class="insight-chart-container"></div>
+    <div class="curve-table-wrap" style="display:none; margin-top:16px; border-top:1px solid var(--border); padding-top:16px">
+      <table class="power-curve-table">
+        <thead>
+          <tr>
+            <th>Duration</th>
+            <th style="text-align:right">Peak</th>
+            <th style="width:32px"></th>
+          </tr>
+        </thead>
+        <tbody class="curve-tbody"></tbody>
+      </table>
+    </div>
+  `;
+  grid.appendChild(card);
+
+  const tableWrap = card.querySelector('.curve-table-wrap') as HTMLElement;
+  const toggleBtn = card.querySelector('.btn-toggle-table') as HTMLElement;
+  const toggleIcon = toggleBtn.querySelector('.material-symbols-rounded') as HTMLElement;
+
+  toggleBtn.addEventListener('click', () => {
+    const isHidden = tableWrap.style.display === 'none';
+    tableWrap.style.display = isHidden ? 'block' : 'none';
+    toggleIcon.textContent = isHidden ? 'expand_less' : 'expand_more';
+  });
+
+  const mapColorBtn = card.querySelector('.map-color-btn') as HTMLElement;
+  mapColorBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const key = mapColorBtn.dataset.metric!;
+    ChartView.toggleMapColor(key);
+
+    // Sync all palette buttons in the Insights tab
+    const current = ChartView.getMapColorMetric();
+    grid.querySelectorAll('.map-color-btn').forEach((btn) => {
+      const b = btn as HTMLElement;
+      b.classList.toggle('active', b.dataset.metric === current);
+    });
+  });
+
+  const tbody = card.querySelector('.curve-tbody');
+  const durations = Object.keys(curve)
+    .map(Number)
+    .sort((a, b) => a - b);
+
+  durations.forEach((d) => {
+    const entry = curve[d];
+    const val = (entry as any).power || (entry as any).hr || (entry as any).val;
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td>${fmtDuration(d)}</td>
+      <td class="power-curve-val">${val} ${unit}</td>
+      <td style="text-align:right">
+        <button class="icon-btn mini btn-show-peak" title="Highlight on Map" data-idx="${entry.idx}" data-len="${d}">
+          <span class="material-symbols-rounded" style="font-size:14px">visibility</span>
+        </button>
+      </td>
+    `;
+    tbody?.appendChild(row);
+  });
+
+  tbody?.querySelectorAll('.btn-show-peak').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      const b = e.currentTarget as HTMLElement;
+      const startIdx = parseInt(b.dataset.idx!);
+      const duration = parseInt(b.dataset.len!);
+      const pts = track.points;
+      const endIdx = Math.min(pts.length - 1, startIdx + duration - 1);
+
+      const t0 = pts[0].time || 0;
+      const tMin = ((pts[startIdx].time || t0) - t0) / 1000;
+      const tMax = ((pts[endIdx].time || t0) - t0) / 1000;
+
+      UrlState.patch({ sel: [tMin, tMax] });
+      MapView.highlightSegment(track.id, pts, startIdx, endIdx, true);
+    });
+  });
+
+  const chartEl = card.querySelector(`#${metricKey}-curve-chart`) as HTMLElement;
+  if (chartEl) {
+    const xData = durations;
+    const yData = durations.map((d) => (curve[d] as any).power || (curve[d] as any).hr || (curve[d] as any).val);
+
+    const curYVal = document.createElement('div');
+    curYVal.className = 'cur-y-val';
+    curYVal.style.cssText = `color:${color};display:none;border-color:${color}44`;
+    chartEl.style.position = 'relative';
+    chartEl.appendChild(curYVal);
+
+    const opts: uPlot.Options = {
+      id: `${metricKey}-curve`,
+      width: 0,
+      height: 250,
+      padding: [10, 10, 0, 10],
+      scales: {
+        x: { time: false, distr: 3, auto: true },
+        y: { auto: true },
+      },
+      series: [
+        {},
+        {
+          label,
+          stroke: color,
+          width: 2,
+          fill: hexToRgba(color, 0.1),
+          points: { show: true, size: 5, fill: color },
+        },
+      ],
+      axes: [
+        {
+          stroke: '#555564',
+          grid: { stroke: '#2e2e34', width: 1 },
+          show: true,
+          values: () => [],
+          ticks: { show: false },
+        },
+        {
+          stroke: '#555564',
+          grid: { stroke: '#2e2e34', width: 1 },
+          values: (_u, vals) => vals.map((v) => `${v}${unit}`),
+        },
+      ],
+      cursor: {
+        drag: { x: false, y: false },
+        dataIdx: (u, seriesIdx, dataIdx) => dataIdx,
+      },
+      hooks: {
+        draw: [
+          (u: uPlot) => {
+            const ctx = u.ctx;
+            const dpr = window.devicePixelRatio || 1;
+            const bb = u.bbox;
+            const benchmarks = [1, 2, 5, 10, 20, 30, 60, 120, 300, 600, 1200, 1800, 3600, 7200, 10800];
+            const maxDur = xData[xData.length - 1];
+
+            ctx.save();
+            ctx.fillStyle = '#555564';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            ctx.font = `${10 * dpr}px system-ui, sans-serif`;
+
+            let lastX = -100;
+            benchmarks.forEach(d => {
+              if (d > maxDur) return;
+              const x = u.valToPos(d, 'x', true);
+              if (x > lastX + 30 * dpr && x < bb.left + bb.width + 5 * dpr) {
+                ctx.fillText(fmtDuration(d), x, bb.top + bb.height + 6 * dpr);
+                lastX = x;
+              }
+            });
+            ctx.restore();
+          }
+        ],
+        init: [
+          (u: uPlot) => {
+            u.over.addEventListener('click', () => {
+              const idx = u.cursor.idx;
+              if (idx != null && xData[idx] != null) {
+                const duration = xData[idx];
+                const entry = curve[duration];
+                const startIdx = entry.idx;
+                const pts = track.points;
+                const endIdx = Math.min(pts.length - 1, startIdx + duration - 1);
+
+                const t0 = pts[0].time || 0;
+                const tMin = ((pts[startIdx].time || t0) - t0) / 1000;
+                const tMax = ((pts[endIdx].time || t0) - t0) / 1000;
+
+                UrlState.patch({ sel: [tMin, tMax] });
+                MapView.highlightSegment(track.id, pts, startIdx, endIdx, true);
+              }
+            });
+          }
+        ],
+        setCursor: [
+          (u: uPlot) => {
+            const idx = u.cursor.idx;
+            const ctx = u.ctx;
+            const dpr = window.devicePixelRatio || 1;
+            const bb = u.bbox;
+
+            // Proximity check: only show if mouse is vertically near the data point
+            const hasFocus = idx != null && yData[idx] != null && u.cursor.left! >= 0;
+            const mousePy = u.cursor.top!;
+            const pointPy = u.valToPos(yData[idx!]!, 'y', false);
+            const isNear = hasFocus && Math.abs(mousePy - pointPy) < 40;
+
+            if (isNear) {
+              const cx = u.valToPos(xData[idx!]!, 'x', false);
+              const cy = u.valToPos(yData[idx!]!, 'y', false);
+
+              const durVal = xData[idx!];
+              curYVal.innerHTML = `${fmtDuration(durVal)}: ${yData[idx!]} ${unit}`;
+              curYVal.style.transform = `translate(${cx}px, ${cy}px) translate(6px, -50%)`;
+              curYVal.style.display = '';
+
+              const pcx = u.valToPos(xData[idx!]!, 'x', true);
+              const pcy = u.valToPos(yData[idx!]!, 'y', true);
+
+              ctx.save();
+              ctx.beginPath();
+              ctx.setLineDash([2 * dpr, 2 * dpr]);
+              ctx.strokeStyle = hexToRgba(color, 0.4);
+              ctx.lineWidth = 1 * dpr;
+              ctx.moveTo(pcx, bb.top);
+              ctx.lineTo(pcx, bb.top + bb.height);
+              ctx.stroke();
+
+              ctx.beginPath();
+              ctx.setLineDash([]);
+              ctx.arc(pcx, pcy, 3 * dpr, 0, Math.PI * 2);
+              ctx.fillStyle = '#0e0e10';
+              ctx.fill();
+              ctx.strokeStyle = color;
+              ctx.lineWidth = 2 * dpr;
+              ctx.stroke();
+              ctx.restore();
+            } else {
+              curYVal.style.display = 'none';
+            }
+          }
+        ]
+      },
+      legend: { show: false },
+    };
+
+    const obs = new ResizeObserver(() => {
+      if (chartEl.clientWidth > 0) {
+        opts.width = chartEl.clientWidth;
+        new uPlot(opts, [xData, yData], chartEl);
+        obs.disconnect();
+      }
+    });
+    obs.observe(chartEl);
   }
 }
 
@@ -464,4 +625,11 @@ function showPowerZoneSettings(anchorEl: HTMLElement, track: TrackData) {
     }
   };
   setTimeout(() => document.addEventListener('click', dismiss), 10);
+}
+
+function hexToRgba(hex: string, alpha: number) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
 }

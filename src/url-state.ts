@@ -87,7 +87,7 @@ export const UrlState = (() => {
       // Add standard encoded params
       if (_state.track) p.set('track', _state.track);
       if (_state.map) p.set('map', _state.map);
-      if (_state.xaxis) p.set('xaxis', _state.xaxis);
+      if (_state.xaxis && _state.xaxis !== 'time') p.set('xaxis', _state.xaxis);
       if (_state.tab) p.set('tab', _state.tab);
       if (_state.q) p.set('q', _state.q);
       if (_state.re) p.set('re', '1');

@@ -38,6 +38,8 @@
   /* Icon Sizes */
   --is-s: 16px;
   --is-m: 20px;
+
+  --handle-color: #3b82f6;
 }
 
 * {
@@ -477,7 +479,7 @@ button {
 }
 #sidebar-resizer:hover,
 #sidebar-resizer.dragging {
-  background: var(--accent);
+  background: var(--handle-color);
 }
 
 body.dragging-sidebar {
@@ -582,7 +584,7 @@ body.dragging-sidebar {
   z-index: 100;
 }
 #resize-handle:hover {
-  background: var(--surface2);
+  background: var(--handle-color);
 }
 .handle-grip {
   width: 32px;
@@ -634,6 +636,21 @@ body.dragging-sidebar {
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+}
+
+/* Custom scrollbar for active tab content */
+.tab-content.active::-webkit-scrollbar {
+  width: 6px;
+}
+.tab-content.active::-webkit-scrollbar-track {
+  background: transparent;
+}
+.tab-content.active::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+.tab-content.active::-webkit-scrollbar-thumb:hover {
+  background: var(--text-dim);
 }
 
 #chart-toolbar {

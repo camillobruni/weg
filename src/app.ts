@@ -9,7 +9,7 @@ import { MapView } from './map';
 import { ChartView } from './charts';
 import { renderDetails } from './tabs/details';
 import { renderInsights, initInsights } from './tabs/insights';
-import { fmtSecs, escHtml } from './utils';
+import { fmtSecs, escHtml, fmtDate } from './utils';
 
 const TRACK_COLORS: string[] = [
   '#FF6B35',
@@ -221,6 +221,12 @@ document.addEventListener('click', (e) => {
   if (btn.dataset.tab === 'graphs') {
     ChartView.resize();
     updateToolbarLayout();
+
+    // Restore selection from URL
+    const s = UrlState.get().sel;
+    if (s) {
+      ChartView.restoreSelection(s[0], s[1]);
+    }
   }
 });
 
@@ -318,8 +324,13 @@ async function init() {
     const saved = await Storage.getAll();
     saved.sort((a, b) => a.addedAt - b.addedAt);
     for (const t of saved) {
-      // Migration: re-calculate stats if new insights are missing
-      if (!t.stats.powerCurve && !t.stats.hrZones) {
+      // Migration: re-calculate stats if new insights are missing or old format
+      const powerCurveEntries = t.stats.powerCurve ? Object.values(t.stats.powerCurve) : [];
+      const needsRecalc = 
+        (!t.stats.powerCurve || !t.stats.hrZones || !t.stats.hrCurve) ||
+        (powerCurveEntries.length > 0 && typeof (powerCurveEntries[0] as any) === 'number');
+
+      if (needsRecalc) {
         t.stats = Parsers.computeStats(t.points);
         await Storage.save(t);
       }
@@ -779,7 +790,7 @@ function buildTrackItem(track: TrackData) {
 
   const date =
     track.points.length && track.points[0].time
-      ? new Date(track.points[0].time).toLocaleDateString()
+      ? fmtDate(track.points[0].time)
       : 'Unknown date';
 
   item.innerHTML = `

@@ -31,6 +31,7 @@ export interface TrackStats {
   sensors: string[];
   startTime?: number | null;
   powerCurve?: Record<number, { power: number; idx: number }> | null;
+  hrCurve?: Record<number, { hr: number; idx: number }> | null;
   hrZones?: number[] | null; // Time in seconds for each zone
   powerZones?: number[] | null; // Time in seconds for each zone
 }
@@ -56,43 +57,21 @@ export const Parsers = (() => {
       φ2 = (lat2 * Math.PI) / 180;
     const Δφ = ((lat2 - lat1) * Math.PI) / 180;
     const Δλ = ((lon2 - lon1) * Math.PI) / 180;
-    const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const a =
+      Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+      Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
   }
 
-  // ── Compute derivative fields (dist, speed, gradient) ────────
+  // ── Enrich track with distance & metadata ──────────────────
   function enrichPoints(pts: TrackPoint[]): TrackPoint[] {
-    let cumDist = 0;
+    let totalDist = 0;
     for (let i = 0; i < pts.length; i++) {
-      const p = pts[i];
-      if (i === 0) {
-        p.dist = 0;
-        if (p.speed == null) p.speed = 0;
-      } else {
-        const prev = pts[i - 1];
-        const d = haversine(prev.lat, prev.lon, p.lat, p.lon);
-        cumDist += d;
-        p.dist = cumDist;
-
-        // Derive speed from position+time if not given
-        if (p.speed == null && p.time != null && prev.time != null) {
-          const dt = (p.time - prev.time) / 1000; // seconds
-          p.speed = dt > 0 ? d / dt : 0; // m/s
-        }
-      }
-
-      // Gradient (%)
       if (i > 0) {
-        const prev = pts[i - 1];
-        const dDist = (p.dist || 0) - (prev.dist || 0);
-        if (dDist > 0.1 && p.ele != null && prev.ele != null) {
-          p.gradient = ((p.ele - prev.ele) / dDist) * 100;
-        } else {
-          p.gradient = null;
-        }
-      } else {
-        p.gradient = null;
+        totalDist += haversine(pts[i - 1].lat, pts[i - 1].lon, pts[i].lat, pts[i].lon);
       }
+      pts[i].dist = totalDist;
     }
     return pts;
   }
@@ -177,6 +156,7 @@ export const Parsers = (() => {
     if (hrN) {
       stats.sensors.push('Heart Rate');
       stats.hrZones = calculateHRZones(pts);
+      stats.hrCurve = calculateHRCurve(pts);
     }
     if (cadN) stats.sensors.push('Cadence');
     if (powerN) {
@@ -187,11 +167,66 @@ export const Parsers = (() => {
     if (hasTemp) stats.sensors.push('Temperature');
 
     return stats;
-    }
+  }
 
-    function calculatePowerZones(pts: TrackPoint[]) {
+  const STANDARD_CURVE_DURATIONS = [1, 2, 5, 10, 20, 30, 60, 120, 300, 600, 1200, 1800, 3600, 7200, 10800];
+
+  function calculateSlidingMax(data: number[], durations: number[]) {
+    const curve: Record<number, { val: number; idx: number }> = {};
+
+    durations.forEach((d) => {
+      if (d > data.length) return;
+      let maxAvg = 0;
+      let bestIdx = 0;
+      let currentSum = 0;
+
+      for (let i = 0; i < data.length; i++) {
+        currentSum += data[i];
+        if (i >= d) {
+          currentSum -= data[i - d];
+        }
+        if (i >= d - 1) {
+          const avg = currentSum / d;
+          if (avg > maxAvg) {
+            maxAvg = avg;
+            bestIdx = i - d + 1;
+          }
+        }
+      }
+      curve[d] = { val: Math.round(maxAvg), idx: bestIdx };
+    });
+
+    return Object.keys(curve).length > 0 ? curve : null;
+  }
+
+  function calculatePowerCurve(pts: TrackPoint[]) {
+    const powerData = pts.map((p) => p.power || 0);
+    if (powerData.every((p) => p === 0)) return null;
+    const curve = calculateSlidingMax(powerData, STANDARD_CURVE_DURATIONS);
+    if (!curve) return null;
+
+    const result: Record<number, { power: number; idx: number }> = {};
+    for (const d in curve) {
+      result[d] = { power: curve[d].val, idx: curve[d].idx };
+    }
+    return result;
+  }
+
+  function calculateHRCurve(pts: TrackPoint[]) {
+    const hrData = pts.map((p) => p.hr || 0);
+    if (hrData.every((p) => p === 0)) return null;
+    const curve = calculateSlidingMax(hrData, STANDARD_CURVE_DURATIONS);
+    if (!curve) return null;
+
+    const result: Record<number, { hr: number; idx: number }> = {};
+    for (const d in curve) {
+      result[d] = { hr: curve[d].val, idx: curve[d].idx };
+    }
+    return result;
+  }
+
+  function calculatePowerZones(pts: TrackPoint[]) {
     const zones = [0, 0, 0, 0, 0, 0, 0];
-    // Coggan Zones: <55%, 55-75%, 75-90%, 90-105%, 105-120%, 120-150%, >150%
     const thresholds = [0.55, 0.75, 0.9, 1.05, 1.2, 1.5].map((t) => t * ftp);
 
     for (let i = 1; i < pts.length; i++) {
@@ -213,75 +248,43 @@ export const Parsers = (() => {
     }
     if (zones.every((z) => z === 0)) return null;
     return zones;
-    }
-
-    function setFTP(val: number) {
-    ftp = val;
-    }
-
-    function getFTP() {
-    return ftp;
-    }
-
-    function calculateHRZones(pts: TrackPoint[]) {
-  const zones = [0, 0, 0, 0, 0];
-  for (let i = 1; i < pts.length; i++) {
-    const p = pts[i];
-    const prev = pts[i - 1];
-    if (p.hr == null || p.time == null || prev.time == null) continue;
-
-    const dt = (p.time - prev.time) / 1000;
-    if (dt <= 0 || dt > 10) continue; // Skip gaps
-
-    const hr = p.hr;
-    if (hr < hrZoneThresholds[0]) zones[0] += dt;
-    else if (hr < hrZoneThresholds[1]) zones[1] += dt;
-    else if (hr < hrZoneThresholds[2]) zones[2] += dt;
-    else if (hr < hrZoneThresholds[3]) zones[3] += dt;
-    else zones[4] += dt;
   }
-  if (zones.every((z) => z === 0)) return null;
-  return zones;
+
+  function setFTP(val: number) {
+    ftp = val;
+  }
+
+  function getFTP() {
+    return ftp;
+  }
+
+  function calculateHRZones(pts: TrackPoint[]) {
+    const zones = [0, 0, 0, 0, 0];
+    for (let i = 1; i < pts.length; i++) {
+      const p = pts[i];
+      const prev = pts[i - 1];
+      if (p.hr == null || p.time == null || prev.time == null) continue;
+
+      const dt = (p.time - prev.time) / 1000;
+      if (dt <= 0 || dt > 10) continue; // Skip gaps
+
+      const hr = p.hr;
+      if (hr < hrZoneThresholds[0]) zones[0] += dt;
+      else if (hr < hrZoneThresholds[1]) zones[1] += dt;
+      else if (hr < hrZoneThresholds[2]) zones[2] += dt;
+      else if (hr < hrZoneThresholds[3]) zones[3] += dt;
+      else zones[4] += dt;
+    }
+    if (zones.every((z) => z === 0)) return null;
+    return zones;
   }
 
   function setHRZones(thresholds: number[]) {
-  hrZoneThresholds = thresholds;
+    hrZoneThresholds = thresholds;
   }
 
   function getHRZones() {
-  return [...hrZoneThresholds];
-  }
-
-  function calculatePowerCurve(pts: TrackPoint[]) {
-    const powerData = pts.map((p) => p.power || 0);
-    if (powerData.every((p) => p === 0)) return null;
-
-    const durations = [1, 5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600];
-    const curve: Record<number, { power: number; idx: number }> = {};
-
-    durations.forEach((d) => {
-      if (d > powerData.length) return;
-      let maxAvg = 0;
-      let bestIdx = 0;
-      let currentSum = 0;
-
-      for (let i = 0; i < powerData.length; i++) {
-        currentSum += powerData[i];
-        if (i >= d) {
-          currentSum -= powerData[i - d];
-        }
-        if (i >= d - 1) {
-          const avg = currentSum / d;
-          if (avg > maxAvg) {
-            maxAvg = avg;
-            bestIdx = i - d + 1;
-          }
-        }
-      }
-      curve[d] = { power: Math.round(maxAvg), idx: bestIdx };
-    });
-
-    return curve;
+    return [...hrZoneThresholds];
   }
 
   // ── GPX parser ────────────────────────────────────────────────
@@ -310,32 +313,26 @@ export const Parsers = (() => {
     const points: TrackPoint[] = trkpts.map((el) => {
       const lat = parseFloat(el.getAttribute('lat') || '0');
       const lon = parseFloat(el.getAttribute('lon') || '0');
-      const eleStr = el.querySelector('ele')?.textContent;
-      const ele = eleStr ? parseFloat(eleStr) : null;
-      const timeStr = el.querySelector('time')?.textContent;
-      const time = timeStr ? new Date(timeStr).getTime() : null;
+      const eleEl = el.querySelector('ele');
+      const timeEl = el.querySelector('time');
 
-      // Extensions – try multiple schemas
-      const hr =
-        parseFloat(
-          el.querySelector('hr, HeartRateBpm Value, gpxtpx\\:hr, [localName=hr]')?.textContent ||
-            el.getElementsByTagNameNS(ns.tpx, 'hr')[0]?.textContent ||
-            '',
-        ) || null;
+      // Heart rate: <hr> or <gpxtpx:hr>
+      let hr: number | null = null;
+      const hrEl = el.querySelector('hr, HeartRateBpm');
+      if (hrEl) hr = parseInt(hrEl.textContent || '') || null;
+      if (!hr) {
+        const hrNs = el.getElementsByTagNameNS(ns.tpx, 'hr')[0];
+        if (hrNs) hr = parseInt(hrNs.textContent || '') || null;
+      }
 
-      const cad =
-        parseFloat(
-          el.querySelector('cad, cadence, gpxtpx\\:cad, [localName=cad]')?.textContent ||
-            el.getElementsByTagNameNS(ns.tpx, 'cad')[0]?.textContent ||
-            '',
-        ) || null;
-
-      const temp =
-        parseFloat(
-          el.querySelector('atemp, temperature, gpxtpx\\:atemp, [localName=atemp]')?.textContent ||
-            el.getElementsByTagNameNS(ns.tpx, 'atemp')[0]?.textContent ||
-            '',
-        ) || null;
+      // Cadence: <cad> or <gpxtpx:cad>
+      let cad: number | null = null;
+      const cadEl = el.querySelector('cad, Cadence');
+      if (cadEl) cad = parseInt(cadEl.textContent || '') || null;
+      if (!cad) {
+        const cadNs = el.getElementsByTagNameNS(ns.tpx, 'cad')[0];
+        if (cadNs) cad = parseInt(cadNs.textContent || '') || null;
+      }
 
       // Power: <power> or <PowerInWatts> inside extensions
       let power: number | null = null;
@@ -346,15 +343,24 @@ export const Parsers = (() => {
         if (pwNs) power = parseFloat(pwNs.textContent || '') || null;
       }
 
+      // Temp: <atemp>
+      let temp: number | null = null;
+      const tempEl = el.querySelector('atemp, temp');
+      if (tempEl) temp = parseFloat(tempEl.textContent || '') || null;
+      if (!temp) {
+        const tempNs = el.getElementsByTagNameNS(ns.tpx, 'atemp')[0];
+        if (tempNs) temp = parseFloat(tempNs.textContent || '') || null;
+      }
+
       return {
         lat,
         lon,
-        ele: ele != null && isNaN(ele) ? null : ele,
-        time,
+        ele: eleEl ? parseFloat(eleEl.textContent || '0') : null,
+        time: timeEl ? new Date(timeEl.textContent || '').getTime() : null,
         hr,
         cad,
         power,
-        speed: null,
+        speed: null, // GPX usually doesn't have speed per point
         temp,
       };
     });
@@ -366,64 +372,62 @@ export const Parsers = (() => {
 
   // ── TCX parser ────────────────────────────────────────────────
   function parseTCX(buf: ArrayBuffer): any {
-    const text = new TextDecoder().decode(buf);
-    const doc = new DOMParser().parseFromString(text, 'application/xml');
+    const text: string = new TextDecoder().decode(buf);
+    const doc: Document = new DOMParser().parseFromString(text, 'application/xml');
 
-    let name = 'Unnamed Track';
-    const idEl = doc.querySelector('Activity > Id');
-    if (idEl) name = (idEl.textContent?.trim() || '').replace('T', ' ').substring(0, 19);
+    const ns = {
+      tcx: 'http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2',
+      tpx: 'http://www.garmin.com/xmlschemas/ActivityExtension/v2',
+    };
 
-    const nameEl = doc.querySelector('Activity > Notes, Activity > Name');
+    let name = 'Unnamed TCX';
+    const nameEl = doc.querySelector('Id');
     if (nameEl) name = nameEl.textContent?.trim() || name;
 
-    // Device
-    const deviceEl = doc.querySelector('Creator > Name');
+    const deviceEl = doc.querySelector('Creator Name');
     const device = deviceEl ? deviceEl.textContent?.trim() || null : null;
 
-    const tpts = Array.from(doc.querySelectorAll('Trackpoint'));
-    if (!tpts.length) throw new Error('No trackpoints found in TCX');
-
-    const points: TrackPoint[] = tpts
+    const trackpts = Array.from(doc.querySelectorAll('Trackpoint'));
+    const points: TrackPoint[] = trackpts
       .map((el) => {
-        const latStr = el.querySelector('LatitudeDegrees')?.textContent;
-        const lonStr = el.querySelector('LongitudeDegrees')?.textContent;
-        const lat = latStr ? parseFloat(latStr) : NaN;
-        const lon = lonStr ? parseFloat(lonStr) : NaN;
-        if (isNaN(lat) || isNaN(lon)) return null;
+        const latEl = el.querySelector('LatitudeDegrees');
+        const lonEl = el.querySelector('LongitudeDegrees');
+        if (!latEl || !lonEl) return null;
 
-        const eleStr = el.querySelector('AltitudeMeters')?.textContent;
-        const ele = eleStr ? parseFloat(eleStr) : null;
-        const timeStr = el.querySelector('Time')?.textContent;
-        const time = timeStr ? new Date(timeStr).getTime() : null;
-        const hr =
-          parseFloat(
-            el.querySelector('HeartRateBpm Value, HeartRateBpm > Value')?.textContent || '',
-          ) || null;
-        const cad = parseFloat(el.querySelector('Cadence')?.textContent || '') || null;
+        const eleEl = el.querySelector('AltitudeMeters');
+        const timeEl = el.querySelector('Time');
+        const hrEl = el.querySelector('HeartRateBpm Value');
+        const cadEl = el.querySelector('Cadence');
 
-        // Extensions (Garmin ActivityExtension v2)
-        const speed =
-          parseFloat(el.querySelector('Speed, ns3\\:Speed, Extensions Speed')?.textContent || '') ||
-          null;
-        const power =
-          parseFloat(el.querySelector('Watts, ns3\\:Watts, Extensions Watts')?.textContent || '') ||
-          null;
+        // Power and Speed are often in extensions
+        let power: number | null = null;
+        let speed: number | null = null;
+        let temp: number | null = null;
+
+        const ext = el.querySelector('Extensions');
+        if (ext) {
+          const pEl = ext.querySelector('Watts, Power');
+          if (pEl) power = parseFloat(pEl.textContent || '');
+          const sEl = ext.querySelector('Speed');
+          if (sEl) speed = parseFloat(sEl.textContent || '');
+          const tEl = ext.querySelector('AvgTemperature, Temp');
+          if (tEl) temp = parseFloat(tEl.textContent || '');
+        }
 
         return {
-          lat,
-          lon,
-          ele: ele != null && isNaN(ele) ? null : ele,
-          time,
-          hr,
-          cad,
+          lat: parseFloat(latEl.textContent || '0'),
+          lon: parseFloat(lonEl.textContent || '0'),
+          ele: eleEl ? parseFloat(eleEl.textContent || '0') : null,
+          time: timeEl ? new Date(timeEl.textContent || '').getTime() : null,
+          hr: hrEl ? parseInt(hrEl.textContent || '') : null,
+          cad: cadEl ? parseInt(cadEl.textContent || '') : null,
           power,
           speed,
-          temp: null,
-        } as TrackPoint;
+          temp,
+        };
       })
       .filter((p): p is TrackPoint => p !== null);
 
-    if (!points.length) throw new Error('No valid trackpoints (with lat/lon) in TCX');
     const pts = enrichPoints(points);
     const stats = computeStats(pts);
     return { name, device, format: 'tcx', points: pts, stats };
@@ -432,74 +436,32 @@ export const Parsers = (() => {
   // ── FIT parser ────────────────────────────────────────────────
   function parseFIT(buf: ArrayBuffer): Promise<any> {
     return new Promise((resolve, reject) => {
-      if (typeof FitParser === 'undefined') {
-        reject(new Error('FIT parser not loaded. Check your connection.'));
-        return;
-      }
-      const fit = new FitParser({
+      const fitParser = new FitParser({
         force: true,
         speedUnit: 'km/h',
         lengthUnit: 'm',
         temperatureUnit: 'celsius',
-        elapsedRecordField: false,
-        mode: 'cascade',
+        elapsedRecordField: true,
       });
-      fit.parse(buf, (err: any, data: any) => {
-        if (err) {
-          reject(new Error('FIT parse error: ' + err));
+
+      fitParser.parse(buf, (error: any, data: any) => {
+        if (error) {
+          reject(error);
           return;
         }
         try {
-          let name = 'FIT Activity';
-          const sessions = data.activity?.sessions;
-          if (!sessions?.length) {
-            reject(new Error('No sessions in FIT file'));
-            return;
-          }
+          const name = data.sessions?.[0]?.start_time
+            ? `Fit Activity ${new Date(data.sessions[0].start_time).toISOString().split('T')[0]}`
+            : 'Unnamed Fit';
+          const device = data.device_infos?.[0]?.product_name || null;
 
-          // Device info
-          let device = null;
-          const fileId = data.file_id;
-          if (fileId) {
-            const manufacturer = fileId.manufacturer;
-            const product = fileId.product;
-            if (manufacturer && product) device = `${manufacturer} ${product}`;
-            else if (manufacturer) device = manufacturer;
-          }
-
-          // Collect all records across laps
-          const allRecords: any[] = [];
-          for (const session of sessions) {
-            for (const lap of session.laps || []) {
-              for (const rec of lap.records || []) {
-                allRecords.push(rec);
-              }
-            }
-          }
-          if (!allRecords.length) {
-            reject(new Error('No records in FIT file'));
-            return;
-          }
-
-          // Try to extract a sport/name
-          const sport = sessions[0]?.sport;
-          if (sport) name = sport.charAt(0).toUpperCase() + sport.slice(1) + ' Activity';
-          // Use start time as part of name
-          const st = sessions[0]?.start_time;
-          if (st) {
-            const d = st instanceof Date ? st : new Date(st);
-            name += ' ' + d.toISOString().slice(0, 10);
-          }
-
-          const points: (TrackPoint | null)[] = allRecords.map((r) => {
+          const records = data.records || [];
+          const points = records.map((r: any) => {
             const lat = r.position_lat;
             const lon = r.position_long;
             if (lat == null || lon == null) return null;
-            const time = r.timestamp
-              ? r.timestamp instanceof Date
-                ? r.timestamp.getTime()
-                : new Date(r.timestamp).getTime()
-              : null;
+
+            const time = r.timestamp ? new Date(r.timestamp).getTime() : null;
             const speed = r.speed != null ? r.speed / 3.6 : null; // km/h → m/s
             return {
               lat,
@@ -513,7 +475,7 @@ export const Parsers = (() => {
               temp: r.temperature ?? null,
             };
           });
-          const validPoints = points.filter((p): p is TrackPoint => p !== null);
+          const validPoints = points.filter((p: any): p is TrackPoint => p !== null);
 
           if (!validPoints.length) {
             reject(new Error('FIT file has no GPS points'));
@@ -591,5 +553,12 @@ export const Parsers = (() => {
     }
   }
 
-  return { parseFile, computeStats, setHRZones, getHRZones, setFTP, getFTP };
+  return {
+    parseFile,
+    computeStats,
+    setHRZones,
+    getHRZones,
+    setFTP,
+    getFTP,
+  };
 })();
