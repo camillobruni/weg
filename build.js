@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 import * as esbuild from 'esbuild';
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { readFile, writeFile, mkdir, copyFile } from 'fs/promises'; // Added copyFile
 import path from 'path';
 
 const args = process.argv.slice(2);
@@ -22,29 +22,43 @@ const baseConfig = {
     '.png': 'file',
     '.svg': 'file',
   },
+  alias: {
+    // When leaflet.css asks for 'images/layers.png', look here:
+    'images': path.resolve('node_modules/leaflet/dist/images'),
+  },
 };
+
+/**
+ * Copies static assets that esbuild doesn't handle via imports
+ */
+async function copyStaticAssets() {
+  const assets = ['index.html', 'material_icons.woff2']; 
+  await mkdir('dist', { recursive: true });
+  
+  for (const asset of assets) {
+    try {
+      await copyFile(asset, path.join('dist', asset));
+      console.log(`Copied ${asset} to dist/`);
+    } catch (e) {
+      console.warn(`Could not copy ${asset}: ${e.message}`);
+    }
+  }
+}
 
 async function collectLicenses() {
   const deps = ['leaflet', 'uplot', 'fit-file-parser'];
   let output = '';
 
-  // 1. Root License
   try {
     const rootLicense = await readFile('LICENSE', 'utf-8');
-    output += 'WEG LICENSE\n';
-    output += '===========\n\n';
-    output += rootLicense + '\n\n';
+    output += 'WEG LICENSE\n===========\n\n' + rootLicense + '\n\n';
   } catch (e) {}
 
-  // 2. Dependency Licenses
   for (const dep of deps) {
     try {
       const licensePath = path.join('node_modules', dep, 'LICENSE');
       const content = await readFile(licensePath, 'utf-8');
-      output += `\n\n------------------------------------------------------------------------------\n`;
-      output += `${dep.toUpperCase()} LICENSE\n`;
-      output += `------------------------------------------------------------------------------\n\n`;
-      output += content + '\n';
+      output += `\n\n------------------------------------------------------------------------------\n${dep.toUpperCase()} LICENSE\n------------------------------------------------------------------------------\n\n${content}\n`;
     } catch (e) {
       console.warn(`Could not find license for ${dep}`);
     }
@@ -57,7 +71,6 @@ async function collectLicenses() {
 
 async function build() {
   // 1. Bundle Weg code
-  // We mark dependencies as external so they are not included in the main bundle
   const ctxWeg = await esbuild.context({
     ...baseConfig,
     entryPoints: ['src/app.ts'],
@@ -65,11 +78,11 @@ async function build() {
     external: ['leaflet', 'uplot', 'fit-file-parser'],
   });
 
-  // 2. Bundle Vendors individually
+  // 2. Bundle Vendors
   const vendorEntryPoints = {
     'leaflet': 'node_modules/leaflet/dist/leaflet-src.js',
     'uplot': 'node_modules/uplot/dist/uPlot.esm.js',
-    'fit-file-parser': 'src/vendor-fit.ts', // Wrapper to expose ESM
+    'fit-file-parser': 'src/vendor-fit.ts', 
   };
 
   const vendorCtxs = await Promise.all(
@@ -87,7 +100,8 @@ async function build() {
     ...baseConfig,
     entryPoints: ['src/css/styles.css'],
     entryNames: 'styles',
-    external: ['*.png', '*.gif'],
+    // We don't mark these external if we want them in dist/
+    // loader will handle them
   });
 
   if (watch) {
@@ -96,27 +110,30 @@ async function build() {
       ctxCss.watch(),
       ...vendorCtxs.map(c => c.watch())
     ]);
-    console.log('Watching for changes...');
-
-    // Simple dev server
+    
+    // In watch mode, we serve from the project root so index.html works
     const { host, port } = await ctxWeg.serve({
-      servedir: '.',
+      servedir: '.', 
       fallback: 'index.html',
     });
-    console.log(`Server running at http://${host}:${port}`);
+    console.log(`Development server: http://${host}:${port}`);
   } else {
+    // Production Build
     await Promise.all([
       ctxWeg.rebuild(),
       ctxCss.rebuild(),
       ...vendorCtxs.map(c => c.rebuild())
     ]);
+    
+    await copyStaticAssets(); // Crucial for production
     await collectLicenses();
+    
     await Promise.all([
       ctxWeg.dispose(),
       ctxCss.dispose(),
       ...vendorCtxs.map(c => c.dispose())
     ]);
-    console.log('Build complete.');
+    console.log('Build complete. Production files are in dist/');
   }
 }
 
