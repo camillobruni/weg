@@ -8,6 +8,8 @@ const UrlState = (() => {
 
   // Internal state object, initialized from current URL.
   let _state = {};
+  let _lastSearch = null;
+  let _syncTimeout = null;
 
   function read() {
     const p = new URLSearchParams(location.search);
@@ -47,50 +49,58 @@ const UrlState = (() => {
 
   // Sync _state to browser URL
   function _sync() {
-    const p = new URLSearchParams();
+    if (_syncTimeout) clearTimeout(_syncTimeout);
 
-    // Add standard encoded params
-    if (_state.track) p.set('track', _state.track);
-    if (_state.map)   p.set('map',   _state.map);
-    if (_state.xaxis) p.set('xaxis', _state.xaxis);
-    if (_state.q)     p.set('q',     _state.q);
-    if (_state.re)    p.set('re',    '1');
-    
-    if (_state.sort) {
-      const [field, dir] = _state.sort.split('-');
-      p.set('sort', (dir === 'desc' ? '-' : '') + field);
-    }
+    _syncTimeout = setTimeout(() => {
+      const p = new URLSearchParams();
 
-    let search = p.toString();
+      // Add standard encoded params
+      if (_state.track) p.set('track', _state.track);
+      if (_state.map)   p.set('map',   _state.map);
+      if (_state.xaxis) p.set('xaxis', _state.xaxis);
+      if (_state.q)     p.set('q',     _state.q);
+      if (_state.re)    p.set('re',    '1');
 
-    // Add comma-separated params (literal commas for cleaner URL)
-    if (_state.metrics) {
-      search += (search ? '&' : '') + 'metrics=' + _state.metrics.join(',');
-    }
-    if (_state.f_date) {
-      search += (search ? '&' : '') + 'f_date=' + _state.f_date.join(',');
-    }
-    if (_state.f_dist) {
-      search += (search ? '&' : '') + 'f_dist=' + _state.f_dist.join(',');
-    }
-    if (_state.f_dur) {
-      search += (search ? '&' : '') + 'f_dur=' + _state.f_dur.join(',');
-    }
-    if (_state.f_mets) {
-      search += (search ? '&' : '') + 'f_mets=' + _state.f_mets.join(',');
-    }
+      if (_state.sort) {
+        const [field, dir] = _state.sort.split('-');
+        p.set('sort', (dir === 'desc' ? '-' : '') + field);
+      }
 
-    if (_state.map_pos) {
-      const val = (+_state.map_pos[0]).toFixed(5) + ',' + (+_state.map_pos[1]).toFixed(5) + ',' + _state.map_pos[2];
-      search += (search ? '&' : '') + 'map_pos=' + val;
-    }
-    if (_state.sel) {
-      const val = (+_state.sel[0].toFixed(4)) + ',' + (+_state.sel[1].toFixed(4));
-      search += (search ? '&' : '') + 'sel=' + val;
-    }
+      let search = p.toString();
 
-    const url = location.pathname + (search ? '?' + search : '');
-    history.replaceState(null, '', url);
+      // Add comma-separated params (literal commas for cleaner URL)
+      if (_state.metrics) {
+        search += (search ? '&' : '') + 'metrics=' + _state.metrics.join(',');
+      }
+      if (_state.f_date) {
+        search += (search ? '&' : '') + 'f_date=' + _state.f_date.join(',');
+      }
+      if (_state.f_dist) {
+        search += (search ? '&' : '') + 'f_dist=' + _state.f_dist.join(',');
+      }
+      if (_state.f_dur) {
+        search += (search ? '&' : '') + 'f_dur=' + _state.f_dur.join(',');
+      }
+      if (_state.f_mets) {
+        search += (search ? '&' : '') + 'f_mets=' + _state.f_mets.join(',');
+      }
+
+      if (_state.map_pos) {
+        const val = (+_state.map_pos[0]).toFixed(5) + ',' + (+_state.map_pos[1]).toFixed(5) + ',' + _state.map_pos[2];
+        search += (search ? '&' : '') + 'map_pos=' + val;
+      }
+      if (_state.sel) {
+        const val = (+_state.sel[0].toFixed(4)) + ',' + (+_state.sel[1].toFixed(4));
+        search += (search ? '&' : '') + 'sel=' + val;
+      }
+
+      if (search !== _lastSearch) {
+        const url = location.pathname + (search ? '?' + search : '');
+        history.replaceState(null, '', url);
+        _lastSearch = search;
+      }
+      _syncTimeout = null;
+    }, 100);
   }
 
   // Initial read

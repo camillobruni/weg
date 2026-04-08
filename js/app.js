@@ -142,69 +142,6 @@ function initSidebarResizer() {
   });
 }
 
-function syncMetricsToUrl() {
-  const active = ChartView.getActiveMetrics();
-  const metrics = ChartView.METRICS;
-  const abbrs = Array.from(active).map(key => metrics[key].abbr);
-  UrlState.patch({ metrics: abbrs.length ? abbrs : null });
-}
-
-function showMetricMenu(anchorEl) {
-  document.querySelectorAll('.metric-menu-popup').forEach(el => el.remove());
-
-  const popup = document.createElement('div');
-  popup.className = 'metric-menu-popup';
-  
-  const metrics = ChartView.METRICS;
-  const activeMetrics = ChartView.getActiveMetrics?.() || new Set(['elevation', 'speed']);
-  const available = ChartView.getAvailableMetrics?.() || new Set(Object.keys(metrics));
-
-  Object.entries(metrics).forEach(([key, def]) => {
-    if (key === 'gradient') return; // Handled specially or off by default
-    
-    const isAvailable = available.has(key);
-    const isActive = activeMetrics.has(key);
-    
-    const item = document.createElement('div');
-    item.className = `menu-item ${isActive ? 'active' : ''} ${isAvailable ? '' : 'disabled'}`;
-    item.innerHTML = `
-      <span class="material-symbols-rounded">${def.icon}</span>
-      <span class="item-label">${def.label}</span>
-      <span class="material-symbols-rounded check">${isActive ? 'check' : ''}</span>
-    `;
-    
-    if (isAvailable) {
-      item.addEventListener('click', () => {
-        ChartView.toggleMetric(key);
-        syncMetricsToUrl();
-        // Sync the main pill if it exists (hidden but should stay synced)
-        const mainPill = document.querySelector(`.metric-pill[data-metric="${key}"]`);
-        if (mainPill) mainPill.classList.toggle('active');
-        popup.remove();
-      });
-    }
-    popup.appendChild(item);
-  });
-
-  const rect = anchorEl.getBoundingClientRect();
-  popup.style.cssText = `
-    position: fixed;
-    z-index: 10000;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 6px;
-    min-width: 160px;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
-    left: ${rect.left}px;
-    top: ${rect.bottom + 4}px;
-  `;
-  document.body.appendChild(popup);
-
-  const dismiss = e => { if (!popup.contains(e.target) && e.target !== anchorEl) { popup.remove(); document.removeEventListener('click', dismiss); } };
-  setTimeout(() => document.addEventListener('click', dismiss), 10);
-}
-
 // ── Tab Navigation ─────────────────────────────────────────────────
 document.addEventListener('click', e => {
   const btn = e.target.closest('.tab-btn');
@@ -245,6 +182,12 @@ async function init() {
     } else {
       currentMapColors = null;
       MapView.clearMetricColor();
+    }
+    
+    // Refresh highlight with new colors if a selection exists
+    const urlState = UrlState.get();
+    if (urlState.sel) {
+      onChartRangeChange(urlState.sel[0], urlState.sel[1], ChartView.getXAxis());
     }
   });
 
@@ -670,8 +613,6 @@ function showMetricMenu(anchorEl) {
   const available = ChartView.getAvailableMetrics?.() || new Set(Object.keys(metrics));
 
   Object.entries(metrics).forEach(([key, def]) => {
-    if (key === 'gradient') return; // Handled specially or off by default
-    
     const isAvailable = available.has(key);
     const isActive = activeMetrics.has(key);
     

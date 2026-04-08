@@ -15,6 +15,8 @@ const MapView = (() => {
   let onMoveCb       = null;
   let onDblClickCb   = null;
 
+  const GAP_THRESHOLD = 60000; // 1 minute in ms
+
   // Tile layers
   const LAYERS = {
     swisstopo: L.tileLayer(
@@ -98,18 +100,40 @@ const MapView = (() => {
   // ── Track rendering ──────────────────────────────────────────
   function addTrack(track) {
     trackData[track.id] = track;
-    const latlngs = track.points.map(p => [p.lat, p.lon]);
-    const pl = L.polyline(latlngs, {
-      color: track.color,
-      weight: 3,
-      opacity: 0.2,
-    });
-    pl.addTo(map);
-    pl.on('click', e => {
+    const pts = track.points;
+    const layers = [];
+    
+    let currentSegment = [];
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      if (i > 0) {
+        const prev = pts[i-1];
+        const dt = (p.time && prev.time) ? p.time - prev.time : 0;
+        
+        if (dt > GAP_THRESHOLD) {
+          // Finish current segment
+          if (currentSegment.length > 1) {
+            layers.push(L.polyline(currentSegment, { color: track.color, weight: 3, opacity: 0.2 }));
+          }
+          // Draw dotted line for gap
+          layers.push(L.polyline([[prev.lat, prev.lon], [p.lat, p.lon]], {
+            color: track.color, weight: 2, opacity: 0.15, dashArray: '5, 8'
+          }));
+          currentSegment = [];
+        }
+      }
+      currentSegment.push([p.lat, p.lon]);
+    }
+    if (currentSegment.length > 1) {
+      layers.push(L.polyline(currentSegment, { color: track.color, weight: 3, opacity: 0.2 }));
+    }
+
+    const group = L.featureGroup(layers).addTo(map);
+    group.on('click', e => {
       L.DomEvent.stopPropagation(e);
       if (onSelectCb) onSelectCb(track.id);
     });
-    polylines[track.id] = pl;
+    polylines[track.id] = group;
   }
 
   function colorTrackByMetric(id, pts, colors) {
@@ -120,11 +144,20 @@ const MapView = (() => {
     const segs = [];
     for (let i = 1; i < pts.length; i++) {
       if (!pts[i-1] || !pts[i]) continue;
+      const dt = (pts[i].time && pts[i-1].time) ? pts[i].time - pts[i-1].time : 0;
       const c = colors[i] || colors[i-1] || '#888896';
-      segs.push(L.polyline(
-        [[pts[i-1].lat, pts[i-1].lon], [pts[i].lat, pts[i].lon]],
-        { color: c, weight: 4, opacity: 0.9, interactive: false }
-      ));
+      
+      if (dt > GAP_THRESHOLD) {
+        segs.push(L.polyline(
+          [[pts[i-1].lat, pts[i-1].lon], [pts[i].lat, pts[i].lon]],
+          { color: '#888896', weight: 2, opacity: 0.5, dashArray: '4, 6', interactive: false }
+        ));
+      } else {
+        segs.push(L.polyline(
+          [[pts[i-1].lat, pts[i-1].lon], [pts[i].lat, pts[i].lon]],
+          { color: c, weight: 4, opacity: 0.9, interactive: false }
+        ));
+      }
     }
     metricColorLayer = L.featureGroup(segs).addTo(map);
 
@@ -200,8 +233,10 @@ const MapView = (() => {
     }
 
     const pl = polylines[selectedId];
-    if (selectedId && pl && map.hasLayer(pl)) {
-      selectedOutline = L.polyline(pl.getLatLngs(), {
+    const track = trackData[selectedId];
+    if (selectedId && pl && track && map.hasLayer(pl)) {
+      const latlngs = track.points.map(p => [p.lat, p.lon]);
+      selectedOutline = L.polyline(latlngs, {
         color: '#000000',
         weight: 7,
         opacity: 0.65,
@@ -248,7 +283,7 @@ const MapView = (() => {
 
     const trackColor = trackData[id]?.color || '#fff';
     
-    // Triple layer for maximum pronunciation: Black -> White -> Color (increased thickness)
+    // Triple layer for maximum pronunciation: Black -> White -> Color
     const bgBlack = L.polyline(latlngs, {
       color: '#000000',
       weight: 14,
@@ -263,26 +298,27 @@ const MapView = (() => {
       interactive: false,
     });
     
-    let inner;
-    if (colors && colors.length) {
-      // Create multi-colored polyline for the highlight
-      const segs = [];
-      for (let i = iMin + 1; i <= iMax; i++) {
-        const c = colors[i] || colors[i-1] || '#888896';
-        segs.push(L.polyline(
-          [[pts[i-1].lat, pts[i-1].lon], [pts[i].lat, pts[i].lon]],
-          { color: c, weight: 6, opacity: 1, interactive: false }
-        ));
-      }
-      inner = L.featureGroup(segs);
-    } else {
-      inner = L.polyline(latlngs, {
-        color: trackColor,
-        weight: 6,
-        opacity: 1,
-        interactive: false,
-      });
+    // Inner segments: handle both metric coloring and gaps
+    const innerSegs = [];
+    for (let i = iMin + 1; i <= iMax; i++) {
+      const p0 = pts[i-1], p1 = pts[i];
+      const dt = (p1.time && p0.time) ? p1.time - p0.time : 0;
+      
+      const c = (colors && colors[i]) ? colors[i] : trackColor;
+      const isGap = dt > GAP_THRESHOLD;
+      
+      innerSegs.push(L.polyline(
+        [[p0.lat, p0.lon], [p1.lat, p1.lon]],
+        {
+          color: isGap ? '#888896' : c,
+          weight: 6,
+          opacity: 1,
+          dashArray: isGap ? '4, 6' : null,
+          interactive: false
+        }
+      ));
     }
+    const inner = L.featureGroup(innerSegs);
 
     // Start/End markers (Monochrome)
     const startIcon = L.divIcon({
@@ -298,8 +334,8 @@ const MapView = (() => {
       iconAnchor: [10, 10],
     });
 
-    const mStart = L.marker(latlngs[0], { icon: startIcon, interactive: false });
-    const mEnd   = L.marker(latlngs[latlngs.length - 1], { icon: endIcon, interactive: false });
+    const mStart = L.marker([pts[iMin].lat, pts[iMin].lon], { icon: startIcon, interactive: false });
+    const mEnd   = L.marker([pts[iMax].lat, pts[iMax].lon], { icon: endIcon, interactive: false });
 
     // Group them on the highlightLine variable for easy removal
     highlightLine = L.featureGroup([bgBlack, bgWhite, inner, mStart, mEnd]).addTo(map);

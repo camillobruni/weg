@@ -13,6 +13,19 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css">
   <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
 
+  <!-- Minimal Buffer shim for FIT parser -->
+  <script>
+    if (typeof window !== 'undefined' && typeof window.Buffer === 'undefined') {
+      window.Buffer = {
+        from: (arr) => {
+          if (arr instanceof ArrayBuffer) return new Uint8Array(arr);
+          return new Uint8Array(arr);
+        },
+        isBuffer: (obj) => obj instanceof Uint8Array
+      };
+    }
+  </script>
+
   <!-- FitParser (FIT file parser) -->
   <script src="https://cdn.jsdelivr.net/npm/fit-parser@1.10.0/dist/fit-parser.min.js"></script>
 
