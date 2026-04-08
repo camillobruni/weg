@@ -5,9 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Weg — GPS Analysis</title>
 
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="dist/styles.css">
+
+  <script type="importmap">
+    {
+      "imports": {
+        "leaflet": "./dist/leaflet.mjs",
+        "uplot": "./dist/uplot.mjs",
+        "fit-file-parser": "./dist/fit-file-parser.mjs"
+      }
+    }
+  </script>
 </head>
 <body>
   <div id="app">
@@ -158,25 +166,25 @@
               <span class="material-symbols-rounded">expand_more</span>
             </button>
             <div id="metric-pills">
-              <button class="metric-pill active" data-metric="elevation" style="--pill-color:#4ECDC4" title="Toggle Elevation graph">
+              <button class="metric-pill active" data-metric="elevation" style="--pill-color:#4ECDC4" title="Toggle Elevation graph" draggable="true">
                 <span class="material-symbols-rounded">height</span>Elevation
               </button>
-              <button class="metric-pill active" data-metric="speed"     style="--pill-color:#45B7D1" title="Toggle Speed graph">
+              <button class="metric-pill active" data-metric="speed"     style="--pill-color:#45B7D1" title="Toggle Speed graph" draggable="true">
                 <span class="material-symbols-rounded">speed</span>Speed
               </button>
-              <button class="metric-pill"        data-metric="gradient"  style="--pill-color:#A8C8A0" title="Toggle Gradient graph">
+              <button class="metric-pill"        data-metric="gradient"  style="--pill-color:#A8C8A0" title="Toggle Gradient graph" draggable="true">
                 <span class="material-symbols-rounded">trending_up</span>Gradient
               </button>
-              <button class="metric-pill"        data-metric="power"     style="--pill-color:#F7DC6F" title="Toggle Power graph">
+              <button class="metric-pill"        data-metric="power"     style="--pill-color:#F7DC6F" title="Toggle Power graph" draggable="true">
                 <span class="material-symbols-rounded">bolt</span>Power
               </button>
-              <button class="metric-pill"        data-metric="hr"        style="--pill-color:#FF6B6B" title="Toggle Heart Rate graph">
+              <button class="metric-pill"        data-metric="hr"        style="--pill-color:#FF6B6B" title="Toggle Heart Rate graph" draggable="true">
                 <span class="material-symbols-rounded">favorite</span>Heart Rate
               </button>
-              <button class="metric-pill"        data-metric="cadence"   style="--pill-color:#BB8FCE" title="Toggle Cadence graph">
+              <button class="metric-pill"        data-metric="cadence"   style="--pill-color:#BB8FCE" title="Toggle Cadence graph" draggable="true">
                 <span class="material-symbols-rounded">directions_run</span>Cadence
               </button>
-              <button class="metric-pill"        data-metric="temperature" style="--pill-color:#F8C471" title="Toggle Temperature graph">
+              <button class="metric-pill"        data-metric="temperature" style="--pill-color:#F8C471" title="Toggle Temperature graph" draggable="true">
                 <span class="material-symbols-rounded">thermostat</span>Temp
               </button>
             </div>
@@ -241,7 +249,6 @@
   <div id="hist-tooltip"></div>
   <div id="hist-line"></div>
 
-  <script src="dist/vendor.js" type="module"></script>
-  <script src="dist/weg.js" type="module"></script>
+  <script src="dist/weg.mjs" type="module"></script>
 </body>
 </html>

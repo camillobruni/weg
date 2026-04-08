@@ -178,10 +178,10 @@ export const Parsers = (() => {
 
   // ── GPX parser ────────────────────────────────────────────────
   function parseGPX(buf: ArrayBuffer): any {
-    const text = new TextDecoder().decode(buf);
-    const doc = new DOMParser().parseFromString(text, 'application/xml');
+    const text: string = new TextDecoder().decode(buf);
+    const doc: Document = new DOMParser().parseFromString(text, 'application/xml');
 
-    const ns = {
+    const ns: Record<string, string> = {
       gpx: 'http://www.topografix.com/GPX/1/1',
       tpx: 'http://www.garmin.com/xmlschemas/TrackPointExtension/v1',
       gpxx: 'http://www.garmin.com/xmlschemas/GpxExtensions/v3',

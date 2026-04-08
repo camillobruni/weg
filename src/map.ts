@@ -6,7 +6,9 @@ import L from 'leaflet';
 import { TrackData, TrackPoint } from './parsers';
 
 export const MapView = (() => {
-  let map: L.Map, cursorMarker: L.Marker, highlightLine: L.FeatureGroup | null;
+  let map: L.Map;
+  let cursorMarker: L.Marker;
+  let highlightLine: L.FeatureGroup | null = null;
   let polylines: Record<string, L.FeatureGroup> = {}; // id → L.FeatureGroup
   let trackData: Record<string, TrackData> = {}; // id → TrackData
   let selectedId: string | null = null;
@@ -17,7 +19,7 @@ export const MapView = (() => {
   let onPointClickCb: (id: string, idx: number) => void;
   let onDblClickCb: () => void;
 
-  const GAP_THRESHOLD = 60000; // 1 minute in ms
+  const GAP_THRESHOLD: number = 60000; // 1 minute in ms
 
   // Tile layers
   const LAYERS: Record<string, L.TileLayer> = {
@@ -315,8 +317,6 @@ export const MapView = (() => {
   }
 
   function centerOn(lat: number, lon: number, zoom?: number | null, animate = true) {
-    // Ensure Leaflet has the latest container dimensions before centering
-    map.invalidateSize();
     if (zoom) {
       map.setView([lat, lon], zoom, { animate });
     } else {
@@ -345,7 +345,7 @@ export const MapView = (() => {
     const segs: L.Polyline[] = [];
     for (let i = 1; i < pts.length; i++) {
       if (!pts[i - 1] || !pts[i]) continue;
-      const dt = pts[i].time && pts[i - 1].time ? pts[i].time - pts[i - 1].time : 0;
+      const dt = pts[i].time! && pts[i - 1].time! ? pts[i].time! - pts[i - 1].time! : 0;
       const c = colors[i] || colors[i - 1] || '#888896';
 
       if (dt > GAP_THRESHOLD) {

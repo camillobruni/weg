@@ -8,7 +8,8 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "lib": ["DOM", "DOM.Iterable", "ESNext"],
-    "isolatedModules": true
+    "isolatedModules": true,
+    "noEmit": true
   },
   "include": ["src/**/*"]
 }

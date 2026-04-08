@@ -3,6 +3,23 @@
 import uPlot from 'uplot';
 import { TrackPoint, TrackStats, TrackData } from './parsers';
 
+// Augment uPlot to include our custom property
+interface WegPlot extends uPlot {
+  _strasse?: {
+    selFill: HTMLElement;
+    anchorLine: HTMLElement;
+    anchorLabel: HTMLElement;
+    anchorHandle: HTMLElement;
+    anchorMarker: HTMLElement;
+    endLine: HTMLElement;
+    endLabel: HTMLElement;
+    endHandle: HTMLElement;
+    endMarker: HTMLElement;
+    curYVal: HTMLElement;
+    updateHeaderStats: (min: number, max: number) => void;
+  };
+}
+
 export interface MetricDefinition {
   label: string;
   field: keyof TrackPoint;
@@ -20,9 +37,9 @@ export interface MetricDefinition {
 }
 
 interface PlotData {
-  uplot: uPlot;
+  uplot: WegPlot;
   row: HTMLDivElement;
-  xData: (number | null)[];
+  xData: number[];
   yData: (number | null)[];
   def: MetricDefinition;
   metricKey: string;
@@ -37,7 +54,7 @@ interface PlotData {
 
 interface HistData {
   yData: (number | null)[];
-  xData: (number | null)[];
+  xData: number[];
   def: MetricDefinition;
   BINS: number;
   plot?: PlotData;
@@ -48,6 +65,8 @@ interface HistData {
   padL?: number;
   selBins?: number[] | null;
   selBinAccum?: number[] | null;
+  _lastYData?: any;
+  _lastSelRange?: [number, number] | null;
 }
 
 export const ChartView = (() => {
@@ -58,7 +77,7 @@ export const ChartView = (() => {
     unsub: (u: uPlot) => void;
     pub: (type: string, u: uPlot, x: number, y: number, w: number, h: number, i: number) => void;
   } | null = null;
-  let scaleSyncing = false;
+  let scaleSyncing: boolean = false;
   let activeMetrics: Set<string> = new Set(['elevation', 'speed']);
   let availableMetrics: Set<string> = new Set();
   let xAxis: string = 'time';
@@ -82,15 +101,15 @@ export const ChartView = (() => {
     null;
   let onClickCb: ((pt: TrackPoint) => void) | null = null;
 
-  const HIST_W = 130;
-  const ROW_BODY_PADDING = 28; // 14px left + 14px right
-  const HIST_GAP = 20; // margin-left on .hist-col
-  let statsVisible = true;
+  const HIST_W: number = 130;
+  const ROW_BODY_PADDING: number = 28; // 14px left + 14px right
+  const HIST_GAP: number = 20; // margin-left on .hist-col
+  let statsVisible: boolean = true;
   let histTooltipEl: HTMLElement | null = null;
-  let container: HTMLElement | null,
-    emptyEl: HTMLElement | null,
-    selStatsEl: HTMLElement | null,
-    resetSelBtn: HTMLElement | null;
+  let container: HTMLElement | null = null;
+  let emptyEl: HTMLElement | null = null;
+  let selStatsEl: HTMLElement | null = null;
+  let resetSelBtn: HTMLElement | null = null;
   let mapColorMetric: string | null = null;
   let onMapColorChangeCb: ((data: { pts: TrackPoint[]; colors: string[] } | null) => void) | null =
     null;
@@ -260,6 +279,41 @@ export const ChartView = (() => {
     });
   }
 
+  function setVisibleRange(min: number, max: number, animate = false) {
+    if (!plots.length) return;
+    if (!animate) {
+      plots.forEach(({ uplot: u }) => u.setScale('x', { min, max }));
+      return;
+    }
+
+    const startMin = (currentXRange ? currentXRange[0] : plots[0].uplot.scales.x!.min) as number;
+    const startMax = (currentXRange ? currentXRange[1] : plots[0].uplot.scales.x!.max) as number;
+
+    if (animId) cancelAnimationFrame(animId);
+
+    const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+    const factor = 0.25; // Smoothing factor
+
+    const step = () => {
+      if (!targetXRange) return;
+      const [tMin, tMax] = targetXRange;
+
+      const cMin = lerp(currentXRange![0], tMin, factor);
+      const cMax = lerp(currentXRange![1], tMax, factor);
+
+      plots.forEach(({ uplot: u }) => {
+        u.setScale('x', { min: cMin, max: cMax });
+      });
+
+      if (Math.abs(cMin - tMin) > 0.0001 || Math.abs(cMax - tMax) > 0.0001) {
+        animId = requestAnimationFrame(step);
+      } else {
+        animId = null;
+      }
+    };
+    animId = requestAnimationFrame(step);
+  }
+
   // ── Public API ────────────────────────────────────────────────
   function loadTrack(track: TrackData) {
     pinnedPtIdx = null;
@@ -326,8 +380,60 @@ export const ChartView = (() => {
   }
 
   function setXAxis(axis: string) {
+    if (xAxis === axis || !currentTrack) {
+      xAxis = axis;
+      return;
+    }
+
+    const pts = currentTrack.points;
+    const t0 = pts.find((p) => p.time != null)?.time || 0;
+
+    // Helper to convert a value from OLD axis to NEW axis
+    const convert = (val: number | null) => {
+      if (val === null) return null;
+      // We need to find the point index closest to 'val' on the OLD axis
+      let idx = 0;
+      if (xAxis === 'distance') {
+        const dTarget = val * 1000;
+        idx = pts.findIndex((p) => (p.dist || 0) >= dTarget);
+      } else {
+        const tTarget = t0 + val * 1000;
+        idx = pts.findIndex((p) => (p.time || 0) >= tTarget);
+      }
+      if (idx === -1) idx = pts.length - 1;
+
+      // Now get the value at this index on the NEW axis
+      if (axis === 'distance') {
+        return (pts[idx].dist || 0) / 1000;
+      } else {
+        return ((pts[idx].time || t0) - t0) / 1000;
+      }
+    };
+
+    // Convert selection
+    if (selAnchorVal !== null) selAnchorVal = convert(selAnchorVal);
+    if (selEndVal !== null) selEndVal = convert(selEndVal);
+
+    // Convert zoom range (from first plot)
+    let newRange: [number, number] | null = null;
+    if (plots.length) {
+      const u = plots[0].uplot;
+      const r0 = convert(u.scales.x!.min!);
+      const r1 = convert(u.scales.x!.max!);
+      if (r0 !== null && r1 !== null) newRange = [r0, r1];
+    }
+
     xAxis = axis;
-    if (currentTrack) render(true);
+    render(true);
+
+    // Apply converted zoom
+    if (newRange) {
+      scaleSyncing = true;
+      plots.forEach(({ uplot: u }) => {
+        u.setScale('x', { min: newRange![0], max: newRange![1] });
+      });
+      scaleSyncing = false;
+    }
   }
 
   function toggleStats() {
@@ -439,7 +545,23 @@ export const ChartView = (() => {
   }
 
   // Called on boot to restore a saved selection without re-firing onRangeChangeCb
-  function restoreSelection(xMin: number, xMax: number) {
+  // xMin/xMax are ALWAYS provided in Time (seconds from start)
+  function restoreSelection(tMin: number, tMax: number) {
+    if (!currentTrack) return;
+    const pts = currentTrack.points;
+    const t0 = pts.find((p) => p.time != null)?.time || 0;
+
+    const convert = (tOffset: number) => {
+      if (xAxis === 'time') return tOffset;
+      const tTarget = t0 + tOffset * 1000;
+      let idx = pts.findIndex((p) => (p.time || 0) >= tTarget);
+      if (idx === -1) idx = pts.length - 1;
+      return (pts[idx].dist || 0) / 1000;
+    };
+
+    const xMin = convert(tMin);
+    const xMax = convert(tMax);
+
     scaleSyncing = true; // suppress the setScale → onRangeChangeCb loop
     plots.forEach(({ uplot: u }) => {
       u.setScale('x', { min: xMin, max: xMax });
@@ -480,13 +602,18 @@ export const ChartView = (() => {
     if (xAxis === 'distance') {
       xData = pts.map((p) => (p.dist || 0) / 1000);
     } else {
-      const t0 = pts[0].time || 0;
-      xData = pts.map((p) => (p.time != null ? (p.time - t0) / 1000 : null));
+      const t0 = pts.find((p) => p.time != null)?.time || 0;
+      let lastValidX = 0;
+      xData = pts.map((p) => {
+        if (p.time != null) {
+          lastValidX = (p.time - t0) / 1000;
+          return lastValidX;
+        }
+        return lastValidX; // monotonic fallback
+      });
     }
 
-    const available = [...activeMetrics].filter((m) =>
-      pts.some((p) => p[METRICS[m].field] != null),
-    );
+    const available = [...activeMetrics].filter((m) => pts.some((p) => p[METRICS[m].field] != null));
     if (!available.length) {
       if (emptyEl) {
         emptyEl.style.display = 'flex';
@@ -500,10 +627,12 @@ export const ChartView = (() => {
     if (emptyEl) emptyEl.style.display = 'none';
 
     if (container) {
+      const containerW = container.getBoundingClientRect().width;
       const w = Math.max(
         100,
-        container.clientWidth - ROW_BODY_PADDING - (statsVisible ? HIST_W + HIST_GAP : 0),
+        containerW - ROW_BODY_PADDING - (statsVisible ? HIST_W + HIST_GAP : 0),
       );
+      console.log(`ChartView: Rendering charts with width=${w} (container=${containerW})`);
       available.forEach((key) => {
         const def = METRICS[key];
         const yData = def.compute
@@ -606,7 +735,7 @@ export const ChartView = (() => {
     const yVals = yData.filter((v): v is number => v != null && isFinite(v));
     const gMin = yVals.length ? Math.min(...yVals) : 0;
     const gMax = yVals.length ? Math.max(...yVals) : 100;
-    const gPad = (gMax - gMin) * 0.1 || 1;
+    const gPad = Math.abs(gMax - gMin) * 0.1 || 1;
     const fixedYRange = [gMin - gPad, gMax + gPad];
 
     // Per-range stats
@@ -648,7 +777,9 @@ export const ChartView = (() => {
       height: 130,
       padding: [4, 0, 0, 0],
       cursor: {
-        sync: { key: syncKey!.key },
+        sync: {
+          key: syncKey!.key,
+        },
         drag: { x: true, y: false, uni: 16 },
         focus: { prox: 16 },
         points: {
@@ -662,10 +793,16 @@ export const ChartView = (() => {
         x: false,
         y: false,
       },
-      select: { show: true },
+      select: {
+        show: true,
+        left: 0,
+        top: 0,
+        width: 0,
+        height: 0,
+      },
       legend: { show: false },
       scales: {
-        x: { time: false, range: (_u, mn, mx) => [mn, mx] },
+        x: { time: false, range: (_u: uPlot, mn: number, mx: number) => [mn, mx] },
         y: { range: () => fixedYRange as [number, number] },
       },
       axes: [
@@ -674,8 +811,8 @@ export const ChartView = (() => {
           grid: { stroke: '#2e2e34', width: 1 },
           ticks: { stroke: '#2e2e34' },
           size: 30,
+          space: 60,
           font: '10px system-ui',
-          color: '#555564',
           values: (isDistAxis
             ? (_u: uPlot, vals: number[]) => {
                 const range = _u.scales.x!.max! - _u.scales.x!.min!;
@@ -685,11 +822,14 @@ export const ChartView = (() => {
             : (_u: uPlot, vals: number[]) =>
                 vals.map((v) => {
                   if (v == null) return '';
-                  const h = Math.floor(v / 3600),
-                    m = Math.floor((v % 3600) / 60);
-                  return h > 0
-                    ? `${h}:${String(m).padStart(2, '0')}`
-                    : `${m}:${String((v % 60) | 0).padStart(2, '0')}`;
+                  const absV = Math.abs(v);
+                  const h = Math.floor(absV / 3600);
+                  const m = Math.floor((absV % 3600) / 60);
+                  const s = Math.round(absV % 60);
+                  const hh = h > 0 ? `${h}:` : '';
+                  const mm = h > 0 ? String(m).padStart(2, '0') : String(m);
+                  const ss = String(s).padStart(2, '0');
+                  return `${v < 0 ? '-' : ''}${hh}${mm}:${ss}`;
                 })) as any,
         },
         {
@@ -698,7 +838,6 @@ export const ChartView = (() => {
           ticks: { stroke: '#2e2e34' },
           size: 55,
           font: '10px system-ui',
-          color: '#555564',
           values: ((_u: uPlot, vals: number[]) =>
             vals.map((v) => (v != null ? def.fmtAxis(v) : ''))) as any,
         },
@@ -706,11 +845,11 @@ export const ChartView = (() => {
       series: [
         {},
         metricKey === 'elevation' || metricKey === 'gradient' || mapColorMetric === metricKey
-          ? // Invisible — we draw manually in the draw hook
+          ? // Invisible — we draw manually in the draw hook (except for the background fill)
             {
               label: def.label,
               stroke: 'rgba(0,0,0,0)',
-              fill: 'rgba(0,0,0,0)',
+              fill: hexToRgba(def.color, 0.08),
               width: 0,
               points: { show: false },
             }
@@ -725,13 +864,13 @@ export const ChartView = (() => {
       hooks: {
         draw: [
           ...(metricKey === 'elevation'
-            ? [(u) => drawElevationGradient(u, xData as number[], yData as number[], gradData)]
+            ? [(u: uPlot) => drawElevationGradient(u, xData as number[], yData as number[], gradData)]
             : []),
           ...(metricKey === 'gradient'
-            ? [(u) => drawGradientChart(u, xData as number[], yData as number[])]
+            ? [(u: uPlot) => drawGradientChart(u, xData as number[], yData as number[])]
             : []),
           // Metric coloring sync: if this metric is coloring the map, fill the graph with it too
-          (u) => {
+          (u: uPlot) => {
             if (
               mapColorMetric === metricKey &&
               metricKey !== 'elevation' &&
@@ -740,25 +879,29 @@ export const ChartView = (() => {
               drawMetricColorFill(u, xData as number[], yData as number[], pts, metricKey);
             }
           },
-          (u) => drawHoverLine(u, yData as number[], def.color, pts),
-          (u) => {
+          (u: uPlot) => drawHoverLine(u, yData as number[], def.color, pts),
+          (u: uPlot) => {
             const plot = plots.find((p) => p.uplot === u);
             if (!plot) return;
 
+            const s = (u as any)._strasse;
             // Priority 1: Global pinned point (all charts)
             if (pinnedPtIdx != null) {
-              drawPinnedDot(u, xData, yData, def.color, def, pts);
-            }
-            // Priority 2: Individual histogram pinned Y-pos (this chart only)
-            else if (plot.pinnedHistY != null) {
-              drawYAxisHighlight(u, xData, yData, plot.pinnedHistY, def.color, def);
-            }
-            // Priority 3: Individual histogram hovered Y-pos (this chart only)
-            else if (plot.hoveredHistY != null) {
-              drawYAxisHighlight(u, xData, yData, plot.hoveredHistY, def.color, def);
+              drawPinnedDot(u, xData, yData, def.color, def, pts, metricKey);
+            } else {
+              if (s && s.pinYVal) s.pinYVal.style.display = 'none';
+
+              // Priority 2: Individual histogram pinned Y-pos (this chart only)
+              if (plot.pinnedHistY != null) {
+                drawYAxisHighlight(u, xData, yData, plot.pinnedHistY, def.color, def);
+              }
+              // Priority 3: Individual histogram hovered Y-pos (this chart only)
+              else if (plot.hoveredHistY != null) {
+                drawYAxisHighlight(u, xData, yData, plot.hoveredHistY, def.color, def);
+              }
             }
           },
-          (u) => {
+          (u: uPlot) => {
             const hIdx = u.cursor.idx;
             const hasPinned = pinnedPtIdx != null;
             const hasHover = hIdx != null && u.cursor.left! >= 0;
@@ -768,7 +911,7 @@ export const ChartView = (() => {
               drawVerticalLineOnly(u, pts, pinnedPtIdx!, def.color);
             }
             if (hasHover && hIdx !== pinnedPtIdx) {
-              drawVerticalLineOnly(u, pts, hIdx!, 'rgba(255,255,255,0.4)');
+              drawVerticalLineOnly(u, pts, hIdx!, hexToRgba(def.color, 0.4));
             }
 
             // ── Bold selection x-axis line ──
@@ -791,7 +934,8 @@ export const ChartView = (() => {
               const span = Math.abs(selEndVal - selAnchorVal);
               const label = xAxis === 'distance' ? `${span.toFixed(2)} km` : fmtSecs(span);
               const fontSize = 9 * dpr;
-              ctx.font = `bold ${fontSize}px system-ui, sans-serif`;
+              const fontStr = `bold ${fontSize}px system-ui, sans-serif`;
+              if (ctx.font !== fontStr) ctx.font = fontStr;
               const tw = ctx.measureText(label).width;
 
               // Sticky logic: find the visible start/end of the selection
@@ -829,13 +973,17 @@ export const ChartView = (() => {
               drawXAxisLabels(u, pts, pinnedPtIdx!, def.color, true); // true = skipLine
             }
             if (hasHover && hIdx !== pinnedPtIdx) {
-              drawXAxisLabels(u, pts, hIdx!, '#888896', true); // true = skipLine
+              drawXAxisLabels(u, pts, hIdx!, def.color, true); // true = skipLine
             }
           },
         ],
         setCursor: [
-          (u) => {
+          (u: uPlot) => {
             const idx = u.cursor.idx;
+
+            // Trigger redraw on cursor move to ensure custom canvas markers (hover lines/labels) update live
+            // Note: uPlot handles cross-chart sync when syncKey is used.
+            u.redraw(false);
 
             // Track current x-value for keyboard navigation
             if (u.cursor.left! >= 0) {
@@ -845,55 +993,35 @@ export const ChartView = (() => {
             }
 
             // ── Floating y-value next to cursor dot ──
-            if (idx != null && yData[idx] != null && u.cursor.left! >= 0) {
-              const yPx = u.valToPos(yData[idx]!, 'y', true);
-              const s = u._strasse;
-              if (s) {
-                const { curYVal: curYValEl } = s;
-                let gColor = '#888896';
-                let g = 0;
-                if (idx > 0 && pts[idx] && pts[idx - 1]) {
-                  const p0 = pts[idx - 1],
-                    p1 = pts[idx];
-                  const d = (p1.dist || 0) - (p0.dist || 0);
-                  if (d > 0.1 && p1.ele != null && p0.ele != null) {
-                    g = ((p1.ele - p0.ele) / d) * 100;
-                    gColor = gradientColor(g);
-                  }
-                }
-                curYValEl.innerHTML =
-                  metricKey !== 'elevation'
-                    ? `${def.fmt(yData[idx]!, false)}`
-                    : `${def.fmt(yData[idx]!, false)} <span style="color:${gColor};margin-left:6px;font-size:12px">∠</span> ${Math.abs(g).toFixed(1)}%`;
-                curYValEl.style.color = def.color;
-                curYValEl.style.borderColor = def.color + '44';
-                curYValEl.style.left = `${u.cursor.left! + 12}px`;
-                curYValEl.style.top = `${Math.max(2, Math.min(yPx - 12, u.over.offsetHeight - 24))}px`;
-                curYValEl.style.display = '';
+            const s = (u as any)._strasse;
+            if (s) {
+              if (idx != null && yData[idx] != null) {
+                updateTooltip(u, s.curYVal, idx, xData as number[], yData as number[], pts, def, metricKey);
+              } else {
+                s.curYVal.style.display = 'none';
               }
-            } else {
-              const s = u._strasse;
-              if (s) s.curYVal.style.display = 'none';
             }
 
             // Map marker
-            if (idx != null && pts[idx] && u.cursor.left! >= 0) {
+            if (idx != null && pts[idx]) {
               if (onCursorMoveCb) onCursorMoveCb(pts[idx]);
             }
 
             // Highlight matching histogram bucket
-            if (idx != null && yData[idx] != null && u.cursor.left! >= 0) {
-              const { bins, min, max } = histData;
-              if (bins && min != null && max != null) {
+            if (idx != null && yData[idx] != null) {
+              const { min, max } = histData;
+              if (min != null && max != null) {
                 const span = max - min || 1;
                 const binI = Math.min(
                   histData.BINS - 1,
                   Math.floor(((yData[idx]! - min) / span) * histData.BINS),
                 );
-                plot.hoveredHistY = yData[idx];
-                drawHistogram(histCanvas, histData, 130, binI);
+                if (plot.hoveredHistY !== yData[idx]) {
+                  plot.hoveredHistY = yData[idx];
+                  drawHistogram(histCanvas, histData, 130, binI);
+                }
               }
-            } else {
+            } else if (plot.hoveredHistY !== null) {
               plot.hoveredHistY = null;
               drawHistogram(histCanvas, histData, 130);
             }
@@ -901,7 +1029,7 @@ export const ChartView = (() => {
         ],
 
         setScale: [
-          (u, key) => {
+          (u: uPlot, key: string) => {
             if (key !== 'x') return;
             const { min, max } = u.scales.x!;
 
@@ -917,13 +1045,13 @@ export const ChartView = (() => {
             if (!scaleSyncing) {
               scaleSyncing = true;
               plots.forEach(({ uplot: other }) => {
-                if (other !== u) other.setScale('x', { min, max });
+                if (other !== u) other.setScale('x', { min: min!, max: max! });
               });
               scaleSyncing = false;
             }
 
             // Update header stats for VISIBLE range
-            updateHeaderStats(min!, max!);
+            updateHeaderStats(min as number, max as number);
 
             updateSelOverlay();
             redrawHistograms();
@@ -936,7 +1064,7 @@ export const ChartView = (() => {
         ],
 
         setSelect: [
-          (u) => {
+          (u: uPlot) => {
             if (updatingRange) return;
             targetXRange = null;
             const { left, width } = u.select;
@@ -954,14 +1082,21 @@ export const ChartView = (() => {
               if (onRangeChangeCb) onRangeChangeCb(selAnchorVal, selEndVal, xAxis);
 
               // Clear uPlot's internal selection immediately so it doesn't block WASD/interaction
-              u.setSelect({ left: 0, width: 0 }, false);
+              u.setSelect({ left: 0, top: 0, width: 0, height: 0 }, false);
             }
           },
         ],
       },
     };
 
-    const uplot = new uPlot(uOpts, [xData, yData], plotEl);
+    const uplot = new uPlot(uOpts, [xData, yData] as any, plotEl) as WegPlot;
+    
+    // Force a resize after a brief delay to ensure correct width
+    requestAnimationFrame(() => {
+      const currentW = container!.getBoundingClientRect().width - ROW_BODY_PADDING - (statsVisible ? HIST_W + HIST_GAP : 0);
+      uplot.setSize({ width: Math.max(100, currentW), height: 130 });
+    });
+
     syncKey!.sub(uplot);
 
     // ── Overlay (pointer-events off except handles) ──
@@ -1017,6 +1152,11 @@ export const ChartView = (() => {
     curYVal.className = 'cur-y-val';
     curYVal.style.cssText = `color:${def.color};display:none`;
 
+    // Floating pinned y-value
+    const pinYVal = document.createElement('div');
+    pinYVal.className = 'cur-y-val';
+    pinYVal.style.cssText = `color:${def.color};display:none`;
+
     overlay.append(
       selFill,
       anchorLine,
@@ -1028,6 +1168,7 @@ export const ChartView = (() => {
       endHandle,
       endMarker,
       curYVal,
+      pinYVal,
     );
     uplot.over.appendChild(overlay);
 
@@ -1043,6 +1184,7 @@ export const ChartView = (() => {
       endHandle,
       endMarker,
       curYVal,
+      pinYVal,
       updateHeaderStats,
     };
 
@@ -1082,11 +1224,11 @@ export const ChartView = (() => {
 
     row.addEventListener('dblclick', cancelSelection);
 
-    const histData: HistData = { yData, xData, def, BINS: 24 };
+    const histData: HistData = { yData, xData: xData as number[], def, BINS: 24 };
     const plot: PlotData = {
       uplot,
       row,
-      xData,
+      xData: xData as number[],
       yData,
       def,
       metricKey,
@@ -1295,6 +1437,11 @@ export const ChartView = (() => {
   // ── Histogram logic ──────────────────────────────────────────
   function buildHistBins(histData: HistData) {
     const { yData, xData, BINS } = histData;
+
+    // Cache to avoid re-binning every frame during hover
+    if (histData._lastYData === yData && histData.bins) return;
+    histData._lastYData = yData;
+
     const vals = yData.filter((v): v is number => v != null && isFinite(v));
     if (!vals.length) return;
 
@@ -1340,43 +1487,12 @@ export const ChartView = (() => {
     const { bins, min, max } = histData;
     if (!bins || min == null || max == null) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    const W = HIST_W;
-    const H = chartH;
-    canvas.width = W * dpr;
-    canvas.height = H * dpr;
-    canvas.style.width = W + 'px';
-    canvas.style.height = H + 'px';
-
-    const ctx = canvas.getContext('2d')!;
-    ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, W, H);
-
     const hasSel = selAnchorVal != null && selEndVal != null;
-    const peak = Math.max(...bins);
 
-    // Measure label width so bars start right after them
-    const fmt = (v: number) => (max - min < 10 ? v.toFixed(1) : v.toFixed(0));
-    ctx.font = '9px system-ui, sans-serif';
-    const labelW = Math.ceil(
-      Math.max(
-        ctx.measureText(`${fmt(max)} ${def.unit}`).width,
-        ctx.measureText(`${fmt(min)} ${def.unit}`).width,
-      ),
-    );
-
-    // Vertical alignment with main graph:
-    // uPlot padding: [4, 0, 0, 0]
-    // Axis size: 30
-    const pad = { t: 4, r: 0, b: 30, l: labelW + 6 };
-    histData.padL = pad.l;
-    const plotW = W - pad.l - pad.r;
-    const plotH = H - pad.t - pad.b;
-
-    // Compute selection bins if a range is active
-    let selBins: number[] | null = null;
-    if (hasSel) {
-      selBins = new Array(BINS).fill(0);
+    // Compute selection bins if a range is active and changed
+    if (hasSel && (histData._lastSelRange?.[0] !== selAnchorVal || histData._lastSelRange?.[1] !== selEndVal)) {
+      histData._lastSelRange = [selAnchorVal!, selEndVal!];
+      const selBins = new Array(BINS).fill(0);
       const selBinAccum = new Array(BINS).fill(0);
       const { yData, xData } = histData;
       const span = max - min || 1;
@@ -1393,10 +1509,50 @@ export const ChartView = (() => {
       }
       histData.selBins = selBins;
       histData.selBinAccum = selBinAccum;
-    } else {
+    } else if (!hasSel) {
       histData.selBins = null;
       histData.selBinAccum = null;
+      histData._lastSelRange = null;
     }
+    const selBins = histData.selBins;
+
+    const dpr = window.devicePixelRatio || 1;
+    const W = HIST_W;
+    const H = chartH;
+    
+    // Performance: only set dimensions if they changed (resets canvas)
+    if (canvas.width !== W * dpr || canvas.height !== H * dpr) {
+      canvas.width = W * dpr;
+      canvas.height = H * dpr;
+      canvas.style.width = W + 'px';
+      canvas.style.height = H + 'px';
+    }
+
+    const ctx = canvas.getContext('2d')!;
+    ctx.resetTransform();
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, W, H);
+
+    const peak = Math.max(...bins);
+
+    // Measure label width so bars start right after them
+    const fmt = (v: number) => def.fmtAxis(v);
+    const fontStr = '9px system-ui, sans-serif';
+    if (ctx.font !== fontStr) ctx.font = fontStr;
+    const labelW = Math.ceil(
+      Math.max(
+        ctx.measureText(`${fmt(max)} ${def.unit}`).width,
+        ctx.measureText(`${fmt(min)} ${def.unit}`).width,
+      ),
+    );
+
+    // Vertical alignment with main graph:
+    // uPlot padding: [4, 0, 0, 0]
+    // Axis size: 30
+    const pad = { t: 4, r: 0, b: 30, l: labelW + 6 };
+    histData.padL = pad.l;
+    const plotW = W - pad.l - pad.r;
+    const plotH = H - pad.t - pad.b;
 
     // bin 0 = lowest values → drawn at bottom; bin BINS-1 = highest → drawn at top
     const binY = (i: number) => pad.t + (BINS - 1 - i) * (plotH / BINS);
@@ -1473,8 +1629,9 @@ export const ChartView = (() => {
     }
 
     // Axis labels: max at top, min at bottom
-    ctx.fillStyle = '#888896';
-    ctx.font = '9px system-ui, sans-serif';
+    if (ctx.fillStyle !== '#888896') ctx.fillStyle = '#888896';
+    const font9 = '9px system-ui, sans-serif';
+    if (ctx.font !== font9) ctx.font = font9;
     ctx.textAlign = 'right';
 
     // Draw Max
@@ -1503,13 +1660,13 @@ export const ChartView = (() => {
 
       if (avgY > maxLabelY + labelHeight + 2 && avgY < minLabelY - labelHeight - 2) {
         ctx.textBaseline = 'middle';
-        ctx.fillStyle = '#aaa';
+        if (ctx.fillStyle !== '#aaa') ctx.fillStyle = '#aaa';
         ctx.fillText(`${fmt(stats.avg)} ${def.unit}`, pad.l - 4, avgY);
         // Draw small indicator tick
         ctx.beginPath();
         ctx.moveTo(pad.l - 3, avgY);
         ctx.lineTo(pad.l, avgY);
-        ctx.strokeStyle = '#aaa';
+        if (ctx.strokeStyle !== '#aaa') ctx.strokeStyle = '#aaa';
         ctx.lineWidth = 1;
         ctx.stroke();
       }
@@ -1528,24 +1685,26 @@ export const ChartView = (() => {
       ctx.save();
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
-      ctx.font = '8px system-ui, sans-serif';
+      const font8 = '8px system-ui, sans-serif';
+      if (ctx.font !== font8) ctx.font = font8;
 
       const textY = H - pad.b + 6;
 
       // Draw "Lower" stat
-      ctx.fillStyle = '#888896';
+      if (ctx.fillStyle !== '#888896') ctx.fillStyle = '#888896';
       ctx.fillText('LOWER', pad.l, textY);
-      ctx.fillStyle = '#ccc';
-      ctx.font = 'bold 10px system-ui, sans-serif';
+      if (ctx.fillStyle !== '#ccc') ctx.fillStyle = '#ccc';
+      const fontB10 = 'bold 10px system-ui, sans-serif';
+      if (ctx.font !== fontB10) ctx.font = fontB10;
       ctx.fillText(`${pLower}%`, pad.l, textY + 10);
 
       // Draw "Higher" stat
       const midX = pad.l + plotW / 2;
-      ctx.font = '8px system-ui, sans-serif';
-      ctx.fillStyle = '#888896';
+      if (ctx.font !== font8) ctx.font = font8;
+      if (ctx.fillStyle !== '#888896') ctx.fillStyle = '#888896';
       ctx.fillText('HIGHER', midX, textY);
-      ctx.fillStyle = '#ccc';
-      ctx.font = 'bold 10px system-ui, sans-serif';
+      if (ctx.fillStyle !== '#ccc') ctx.fillStyle = '#ccc';
+      if (ctx.font !== fontB10) ctx.font = fontB10;
       ctx.fillText(`${pHigher}%`, midX, textY + 10);
 
       ctx.restore();
@@ -1582,7 +1741,7 @@ export const ChartView = (() => {
 
     canvas.addEventListener('mousemove', (e) => {
       if (!histTooltipEl) return;
-      const { binAccum, min, max, BINS, def, plot } = histData;
+      const { bins, binAccum, min, max, BINS, def, plot } = histData;
       if (!bins || !binAccum || min == null || max == null) return;
 
       const binI = getBinAt(e);
@@ -1617,11 +1776,6 @@ export const ChartView = (() => {
 
       let html = `
         <div class="hist-tt-header" style="border-left-color:${def.color}">${label}</div>
-        <div class="hist-tt-grid">
-          <span class="hist-tt-label">Points</span>
-          <span class="hist-tt-value">${count}</span>
-          <span class="hist-tt-pct">${pct.toFixed(1)}%</span>
-        </div>
       `;
 
       if (totalAccum) {
@@ -1634,8 +1788,6 @@ export const ChartView = (() => {
 
       // Selection context
       if (histData.selBins && histData.selBinAccum) {
-        const scount = histData.selBins[binI];
-        const spct = (scount / histData.selBins.reduce((s, v) => s + v, 0)) * 100;
         const stotalAccum =
           xAxis === 'distance'
             ? `${histData.selBinAccum[binI].toFixed(2)} km`
@@ -1644,11 +1796,6 @@ export const ChartView = (() => {
           (histData.selBinAccum[binI] / histData.selBinAccum.reduce((s, v) => s + v, 0)) * 100;
 
         html += `
-          <div class="hist-tt-grid sel-row">
-            <span class="hist-tt-label sel">Sel Points</span>
-            <span class="hist-tt-value sel">${scount}</span>
-            <span class="hist-tt-pct sel">${spct.toFixed(1)}%</span>
-          </div>
           <div class="hist-tt-grid sel-row">
             <span class="hist-tt-label sel">Sel ${xAxis === 'distance' ? 'Dist' : 'Time'}</span>
             <span class="hist-tt-value sel">${stotalAccum}</span>
@@ -1760,6 +1907,56 @@ export const ChartView = (() => {
   }
 
   // ── Plot Rendering Helpers (Canvas) ───────────────────────────
+  function updateTooltip(
+    u: WegPlot,
+    el: HTMLElement,
+    idx: number,
+    xData: (number | null)[],
+    yData: (number | null)[],
+    pts: TrackPoint[],
+    def: MetricDefinition,
+    metricKey: string,
+  ) {
+    if (idx == null || yData[idx] == null) {
+      el.style.display = 'none';
+      return;
+    }
+
+    const cx = u.valToPos(xData[idx]!, 'x', false);
+    const cy = u.valToPos(yData[idx]!, 'y', false);
+
+    let gColor = '#888896';
+    let g = 0;
+    if (idx > 0 && pts[idx] && pts[idx - 1]) {
+      const p0 = pts[idx - 1],
+        p1 = pts[idx];
+      const d = (p1.dist || 0) - (p0.dist || 0);
+      if (d > 0.1 && p1.ele != null && p0.ele != null) {
+        g = ((p1.ele - p0.ele) / d) * 100;
+        gColor = gradientColor(g);
+      }
+    }
+
+    const content =
+      metricKey !== 'elevation'
+        ? `${def.fmt(yData[idx]!, false)}&nbsp;${def.unit}`
+        : `${def.fmt(yData[idx]!, false)}&nbsp;${def.unit} <span style="color:${gColor};margin-left:6px;font-size:12px">∠</span> ${Math.abs(g).toFixed(1)}%`;
+
+    if (el.innerHTML !== content) el.innerHTML = content;
+
+    const color44 = def.color + '44';
+    if (el.style.color !== def.color) el.style.color = def.color;
+    if (el.style.borderColor !== color44) el.style.borderColor = color44;
+
+    const left = `${cx}px`;
+    const top = `${cy}px`;
+    const transform = 'translate(6px, -50%)';
+    if (el.style.left !== left) el.style.left = left;
+    if (el.style.top !== top) el.style.top = top;
+    if (el.style.transform !== transform) el.style.transform = transform;
+    if (el.style.display !== '') el.style.display = '';
+  }
+
   function drawElevationGradient(
     u: uPlot,
     xData: number[],
@@ -1775,8 +1972,6 @@ export const ChartView = (() => {
     ctx.rect(bb.left, bb.top, bb.width, bb.height);
     ctx.clip();
 
-    const baseY = bb.top + bb.height;
-
     for (let i = 1; i < xData.length; i++) {
       if (xData[i] == null || yData[i] == null || xData[i - 1] == null || yData[i - 1] == null)
         continue;
@@ -1785,16 +1980,7 @@ export const ChartView = (() => {
       const x1 = u.valToPos(xData[i], 'x', true);
       const y1 = u.valToPos(yData[i], 'y', true);
 
-      ctx.beginPath();
-      ctx.moveTo(x0, y0);
-      ctx.lineTo(x1, y1);
-      ctx.lineTo(x1, baseY);
-      ctx.lineTo(x0, baseY);
-      ctx.closePath();
-
       const g = gradData ? gradData[i] : null;
-      ctx.fillStyle = hexToRgba(gradientColor(g), 0.25);
-      ctx.fill();
 
       // Top line segment
       ctx.beginPath();
@@ -1818,8 +2004,6 @@ export const ChartView = (() => {
     ctx.rect(bb.left, bb.top, bb.width, bb.height);
     ctx.clip();
 
-    const zeroY = u.valToPos(0, 'y', true);
-
     for (let i = 1; i < xData.length; i++) {
       if (xData[i] == null || yData[i] == null || xData[i - 1] == null || yData[i - 1] == null)
         continue;
@@ -1828,16 +2012,7 @@ export const ChartView = (() => {
       const x1 = u.valToPos(xData[i], 'x', true);
       const y1 = u.valToPos(yData[i], 'y', true);
 
-      ctx.beginPath();
-      ctx.moveTo(x0, y0);
-      ctx.lineTo(x1, y1);
-      ctx.lineTo(x1, zeroY);
-      ctx.lineTo(x0, zeroY);
-      ctx.closePath();
-
       const g = yData[i]!;
-      ctx.fillStyle = hexToRgba(gradientColor(g), 0.4);
-      ctx.fill();
 
       ctx.beginPath();
       ctx.moveTo(x0, y0);
@@ -1854,24 +2029,30 @@ export const ChartView = (() => {
     const idx = u.cursor.idx;
     if (idx == null || yData[idx] == null || u.cursor.left! < 0) return;
 
+    const t0 = pts[0].time || 0;
+    const xVal = xAxis === 'distance' ? (pts[idx].dist || 0) / 1000 : (pts[idx].time! - t0) / 1000;
+    const cx = u.valToPos(xVal, 'x', true);
     const cy = u.valToPos(yData[idx], 'y', true);
     const bb = u.bbox;
     const ctx = u.ctx;
     const dpr = window.devicePixelRatio || 1;
 
-    // Line from top to point
+    // Line from top to point + horizontal from left
     ctx.save();
     ctx.beginPath();
     ctx.setLineDash([2 * dpr, 2 * dpr]);
     ctx.strokeStyle = hexToRgba(color, 0.4);
     ctx.lineWidth = 1 * dpr;
-    ctx.moveTo(u.cursor.left!, bb.top);
-    ctx.lineTo(u.cursor.left!, cy);
+    ctx.moveTo(cx, bb.top);
+    ctx.lineTo(cx, cy);
+    ctx.moveTo(bb.left, cy);
+    ctx.lineTo(cx, cy);
     ctx.stroke();
 
     // Dot at point
     ctx.beginPath();
-    ctx.arc(u.cursor.left!, cy, 3 * dpr, 0, Math.PI * 2);
+    ctx.setLineDash([]); // Ensure solid outline
+    ctx.arc(cx, cy, 3 * dpr, 0, Math.PI * 2);
     ctx.fillStyle = '#0e0e10';
     ctx.fill();
     ctx.strokeStyle = color;
@@ -1925,7 +2106,8 @@ export const ChartView = (() => {
       : '';
 
     const drawPill = (text: string, x: number, y: number, isTop: boolean) => {
-      ctx.font = `bold ${10 * dpr}px system-ui, sans-serif`;
+      const fontStr = `bold ${10 * dpr}px system-ui, sans-serif`;
+      if (ctx.font !== fontStr) ctx.font = fontStr;
       const tw = ctx.measureText(text).width;
       const bw = tw + 10 * dpr;
       const bh = 16 * dpr;
@@ -1940,11 +2122,11 @@ export const ChartView = (() => {
       else ctx.rect(clampedRx, ry, bw, bh);
       ctx.fillStyle = 'rgba(14,14,16,0.92)';
       ctx.fill();
-      ctx.strokeStyle = hexToRgba(color, 0.6);
+      ctx.strokeStyle = hexToRgba(color, 0.27);
       ctx.lineWidth = 1 * dpr;
       ctx.stroke();
 
-      ctx.fillStyle = '#fff';
+      ctx.fillStyle = color;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(text, clampedRx + bw / 2, ry + bh / 2 + 0.5 * dpr);
@@ -1963,6 +2145,7 @@ export const ChartView = (() => {
     color: string,
     def: MetricDefinition,
     pts: TrackPoint[],
+    metricKey: string,
   ) {
     if (pinnedPtIdx == null) return;
     const xVal = xData[pinnedPtIdx];
@@ -1984,8 +2167,21 @@ export const ChartView = (() => {
     ctx.lineTo(cx, bb.top + bb.height);
     ctx.stroke();
 
+    // Horizontal dashed line
+    ctx.beginPath();
+    ctx.setLineDash([3 * dpr, 3 * dpr]);
+    ctx.strokeStyle = hexToRgba(color, 0.5);
+    ctx.lineWidth = 1 * dpr;
+    ctx.moveTo(bb.left, cy);
+    ctx.lineTo(cx, cy);
+    ctx.stroke();
+
+    // Area fill above threshold
+    drawAreaFillAbove(u, xData, yData, cy, color);
+
     // Large Dot
     ctx.beginPath();
+    ctx.setLineDash([]); // Ensure solid outline
     ctx.arc(cx, cy, 5 * dpr, 0, Math.PI * 2);
     ctx.fillStyle = '#0e0e10';
     ctx.fill();
@@ -1995,6 +2191,20 @@ export const ChartView = (() => {
     ctx.restore();
 
     drawXAxisLabels(u, pts, pinnedPtIdx, color, true);
+
+    const s = (u as any)._strasse;
+    if (s && s.pinYVal) {
+      updateTooltip(
+        u,
+        s.pinYVal,
+        pinnedPtIdx,
+        xData as number[],
+        yData as (number | null)[],
+        pts,
+        def,
+        metricKey,
+      );
+    }
   }
 
   function drawYAxisHighlight(
@@ -2028,7 +2238,8 @@ export const ChartView = (() => {
 
     // Pill label on Y-axis
     const label = def.fmt(yVal, true);
-    ctx.font = `bold ${10 * dpr}px system-ui, sans-serif`;
+    const fontStr = `bold ${10 * dpr}px system-ui, sans-serif`;
+    if (ctx.font !== fontStr) ctx.font = fontStr;
     const tw = ctx.measureText(label).width;
     const bw = tw + 8 * dpr;
     const bh = 16 * dpr;
@@ -2061,37 +2272,54 @@ export const ChartView = (() => {
   ) {
     const ctx = u.ctx;
     const bb = u.bbox;
-    const dpr = window.devicePixelRatio || 1;
 
     ctx.save();
     ctx.beginPath();
     ctx.rect(bb.left, bb.top, bb.width, bb.height);
     ctx.clip();
 
+    ctx.fillStyle = hexToRgba(color, 0.2);
     ctx.beginPath();
-    ctx.fillStyle = hexToRgba(color, 0.12);
 
-    // We want to fill the "ribbon" between the line and the threshold
+    let inSegment = false;
+
     for (let i = 0; i < xData.length; i++) {
-      if (xData[i] == null || yData[i] == null) continue;
+      if (xData[i] == null || yData[i] == null) {
+        if (inSegment) {
+          ctx.lineTo(u.valToPos(xData[i - 1]!, 'x', true), cyClamp);
+          ctx.closePath();
+          ctx.fill();
+          inSegment = false;
+        }
+        continue;
+      }
+
       const px = u.valToPos(xData[i]!, 'x', true);
       const py = u.valToPos(yData[i]!, 'y', true);
 
-      // If py is above cyClamp (meaning value is higher), we fill
       if (py < cyClamp) {
-        if (i === 0 || yData[i - 1] == null || u.valToPos(yData[i - 1]!, 'y', true) >= cyClamp) {
+        if (!inSegment) {
+          ctx.beginPath();
           ctx.moveTo(px, cyClamp);
+          inSegment = true;
         }
         ctx.lineTo(px, py);
       } else {
-        if (i > 0 && yData[i - 1] != null && u.valToPos(yData[i - 1]!, 'y', true) < cyClamp) {
+        if (inSegment) {
           ctx.lineTo(px, cyClamp);
+          ctx.closePath();
+          ctx.fill();
+          inSegment = false;
         }
       }
     }
-    // To complete the shape, we'd need a more complex path logic.
-    // For now, this simple "above" fill is a placeholder.
-    // Real implementation would properly close segments.
+
+    if (inSegment) {
+      ctx.lineTo(u.valToPos(xData[xData.length - 1]!, 'x', true), cyClamp);
+      ctx.closePath();
+      ctx.fill();
+    }
+
     ctx.restore();
   }
 
@@ -2197,6 +2425,7 @@ export const ChartView = (() => {
     setSelectionStats,
     clearSelectionStats,
     restoreSelection,
+    resetZoom,
     setCursorAt: (idx: number) => {
       plots.forEach(({ uplot: u }) =>
         u.setCursor({ left: u.valToPos(plots[0].xData[idx]!, 'x'), top: 0 }),
@@ -2214,6 +2443,20 @@ export const ChartView = (() => {
     getActiveMetrics: () => activeMetrics,
     getAvailableMetrics: () => availableMetrics,
     setActiveMetrics,
+    updateMetricOrder: (keys: string[]) => {
+      // Keys might only contain current active ones, or more.
+      // We want to re-order activeMetrics to match the order in 'keys'
+      const newActive = new Set<string>();
+      keys.forEach((k) => {
+        if (activeMetrics.has(k)) newActive.add(k);
+      });
+      // Add any remaining ones that were active but not in the keys list (shouldn't happen with our DND)
+      activeMetrics.forEach((k) => {
+        if (!newActive.has(k)) newActive.add(k);
+      });
+      activeMetrics = newActive;
+      if (currentTrack) render(true);
+    },
     getXAxis: () => xAxis,
   };
 
@@ -2234,8 +2477,6 @@ export const ChartView = (() => {
     ctx.rect(bb.left, bb.top, bb.width, bb.height);
     ctx.clip();
 
-    const baseY = bb.top + bb.height;
-
     for (let i = 1; i < xData.length; i++) {
       if (xData[i] == null || yData[i] == null || xData[i - 1] == null || yData[i - 1] == null)
         continue;
@@ -2244,16 +2485,7 @@ export const ChartView = (() => {
       const x1 = u.valToPos(xData[i], 'x', true);
       const y1 = u.valToPos(yData[i], 'y', true);
 
-      ctx.beginPath();
-      ctx.moveTo(x0, y0);
-      ctx.lineTo(x1, y1);
-      ctx.lineTo(x1, baseY);
-      ctx.lineTo(x0, baseY);
-      ctx.closePath();
-
       const c = colors[i];
-      ctx.fillStyle = hexToRgba(c, 0.25);
-      ctx.fill();
 
       // Top line segment
       ctx.beginPath();

@@ -8,7 +8,7 @@ import { Parsers, TrackData, TrackPoint } from './parsers';
 import { MapView } from './map';
 import { ChartView, MetricDefinition } from './charts';
 
-const TRACK_COLORS = [
+const TRACK_COLORS: string[] = [
   '#FF6B35',
   '#4ECDC4',
   '#45B7D1',
@@ -27,24 +27,31 @@ const TRACK_COLORS = [
 ];
 
 let tracks: Record<string, TrackData> = {};
-let colorIdx = 0;
+let colorIdx: number = 0;
 let selectedId: string | null = null;
 let currentMapColors: string[] | null = null;
-let chartHeight = 400; // pixels for chart panel
+let chartHeight: number = 400; // pixels for chart panel
 
-let filters = {
-  date: [null, null] as (string | null)[],
-  dist: [null, null] as (number | null)[],
-  dur: [null, null] as (number | null)[],
+interface Filters {
+  date: (string | null)[];
+  dist: (number | null)[];
+  dur: (number | null)[];
+  metrics: Set<string>;
+}
+
+let filters: Filters = {
+  date: [null, null],
+  dist: [null, null],
+  dur: [null, null],
   metrics: new Set<string>(),
 };
 
-let searchQuery = '';
-let searchRegex = false;
-let currentSort = 'date-desc';
-let followDot = false;
+let searchQuery: string = '';
+let searchRegex: boolean = false;
+let currentSort: string = 'date-desc';
+let followDot: boolean = false;
 
-const POINT_ZOOM_LEVEL = 15;
+const POINT_ZOOM_LEVEL: number = 15;
 
 // ── UI Components ─────────────────────────────────────────────────
 function initResizeHandle() {
@@ -95,6 +102,7 @@ function initSidebarResizer() {
     // Invalidate sub-view sizes as container changes
     MapView.invalidateSize();
     ChartView.resize();
+    updateToolbarLayout();
   };
 
   const onUp = () => {
@@ -144,7 +152,14 @@ function showMetricMenu(anchorEl: HTMLElement) {
   const activeMetrics = ChartView.getActiveMetrics?.() || new Set(['elevation', 'speed']);
   const available = ChartView.getAvailableMetrics?.() || new Set(Object.keys(metrics));
 
-  Object.entries(metrics).forEach(([key, def]) => {
+  // Determine order: Active ones first (in their current order), then the rest
+  const sortedKeys = Array.from(activeMetrics);
+  Object.keys(metrics).forEach((k) => {
+    if (!activeMetrics.has(k)) sortedKeys.push(k);
+  });
+
+  sortedKeys.forEach((key) => {
+    const def = metrics[key];
     const isAvailable = available.has(key);
     const isActive = activeMetrics.has(key);
 
@@ -215,7 +230,10 @@ document.addEventListener('click', (e) => {
     renderDetails(tracks[selectedId]);
   }
 
-  if (btn.dataset.tab === 'graphs') ChartView.resize();
+  if (btn.dataset.tab === 'graphs') {
+    ChartView.resize();
+    updateToolbarLayout();
+  }
 });
 
 // ── Boot ──────────────────────────────────────────────────────────
@@ -332,6 +350,8 @@ async function init() {
   // Panel resizers
   initResizeHandle();
   initSidebarResizer();
+  initMetricPillDraggable();
+  updateToolbarLayout();
 
   // Basemap switcher
   document.getElementById('basemap-switcher')?.addEventListener('click', (e) => {
@@ -387,6 +407,18 @@ async function init() {
   document.getElementById('metric-pills')?.addEventListener('click', (e) => {
     const pill = (e.target as HTMLElement).closest('.metric-pill') as HTMLElement;
     if (pill) toggleMetric(pill.dataset.metric!, pill);
+  });
+
+  // X-axis toggle
+  document.getElementById('x-axis-ctrl')?.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest('.seg-btn') as HTMLElement;
+    if (!btn) return;
+    const axis = btn.dataset.axis!;
+    ChartView.setXAxis(axis);
+    document
+      .querySelectorAll('#x-axis-ctrl .seg-btn')
+      .forEach((b) => b.classList.toggle('active', b === btn));
+    UrlState.patch({ xaxis: axis });
   });
 
   // Follow dot
@@ -482,7 +514,11 @@ async function init() {
   });
 
   // Resize charts when window changes
-  window.addEventListener('resize', () => ChartView.resize());
+  window.addEventListener('resize', () => {
+    ChartView.resize();
+    MapView.invalidateSize?.();
+    updateToolbarLayout();
+  });
 }
 
 function syncFiltersToUrl() {
@@ -1026,9 +1062,9 @@ function onChartCursorMove(pt: TrackPoint) {
 }
 
 function onChartRangeChange(minX: number | null, maxX: number | null, xAxis: string) {
-  UrlState.patch({ sel: minX != null && maxX != null ? [minX, maxX] : null });
   const track = tracks[selectedId!];
   if (!track || minX == null || maxX == null) {
+    UrlState.patch({ sel: null });
     MapView.clearHighlight();
     return;
   }
@@ -1046,6 +1082,15 @@ function onChartRangeChange(minX: number | null, maxX: number | null, xAxis: str
     iMin = pts.findIndex((p) => (p.time || 0) >= tMin);
     iMax = pts.findLastIndex((p) => (p.time || 0) <= tMax);
   }
+
+  // Always save time-based selection to URL
+  if (iMin !== -1 && iMax !== -1) {
+    const t0 = pts[0].time || 0;
+    const tMin = ((pts[iMin].time || t0) - t0) / 1000;
+    const tMax = ((pts[iMax].time || t0) - t0) / 1000;
+    UrlState.patch({ sel: [tMin, tMax] });
+  }
+
   if (iMin !== -1 && iMax !== -1 && iMin < iMax) {
     MapView.highlightSegment(selectedId!, pts, iMin, iMax, true, currentMapColors);
   } else {
@@ -1082,6 +1127,66 @@ function showToast(msg: string, type = 'info') {
     el.classList.add('out');
     setTimeout(() => el.remove(), 400);
   }, 3000);
+}
+
+function updateToolbarLayout() {
+  const toolbar = document.getElementById('chart-toolbar');
+  const pills = document.getElementById('metric-pills');
+  if (!toolbar || !pills) return;
+
+  // We temporarily remove "collapsed" to measure the FULL width needed by pills
+  const wasCollapsed = toolbar.classList.contains('collapsed');
+  toolbar.classList.remove('collapsed');
+
+  // Comparison: scrollWidth (needed) vs clientWidth (available in toolbar)
+  const hasOverflow = pills.scrollWidth > pills.clientWidth;
+
+  if (hasOverflow) {
+    toolbar.classList.add('collapsed');
+  }
+  // Otherwise it stays uncollapsed
+}
+
+function initMetricPillDraggable() {
+  const container = document.getElementById('metric-pills');
+  if (!container) return;
+
+  let draggedEl: HTMLElement | null = null;
+
+  container.addEventListener('dragstart', (e) => {
+    const target = (e.target as HTMLElement).closest('.metric-pill') as HTMLElement;
+    if (!target) return;
+    draggedEl = target;
+    e.dataTransfer!.effectAllowed = 'move';
+    target.classList.add('dragging-pill');
+    // For transparent background in ghost image
+    setTimeout(() => target.style.opacity = '0.4', 0);
+  });
+
+  container.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer!.dropEffect = 'move';
+    const target = (e.target as HTMLElement).closest('.metric-pill') as HTMLElement;
+    if (target && target !== draggedEl) {
+      const rect = target.getBoundingClientRect();
+      const next = (e.clientX - rect.left) > (rect.width / 2);
+      container.insertBefore(draggedEl!, next ? target.nextSibling : target);
+    }
+  });
+
+  container.addEventListener('dragend', () => {
+    if (!draggedEl) return;
+    draggedEl.classList.remove('dragging-pill');
+    draggedEl.style.opacity = '';
+    draggedEl = null;
+
+    // Update Chart order
+    const keys = Array.from(container.querySelectorAll('.metric-pill')).map(
+      (el) => (el as HTMLElement).dataset.metric!,
+    );
+    ChartView.updateMetricOrder(keys);
+    syncMetricsToUrl();
+  });
 }
 
 document.addEventListener('DOMContentLoaded', init);

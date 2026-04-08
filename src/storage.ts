@@ -6,9 +6,9 @@ import { TrackData } from './parsers';
 // Saves/Loads track data locally in the browser.
 
 export const Storage = (() => {
-  const DB_NAME = 'weg-gps-db';
-  const STORE_NAME = 'tracks';
-  const DB_VERSION = 1;
+  const DB_NAME: string = 'weg-gps-db';
+  const STORE_NAME: string = 'tracks';
+  const DB_VERSION: number = 1;
 
   function openDB(): Promise<IDBDatabase> {
     return new Promise((resolve, reject) => {

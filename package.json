@@ -5,19 +5,20 @@
   "main": "src/app.js",
   "type": "module",
   "scripts": {
-    "build": "node build.js",
+    "build": "tsc && node build.js",
     "dev": "node build.js --watch",
+    "check": "tsc --noEmit",
     "format": "prettier --write 'src/**/*.ts' './*.js'"
   },
   "dependencies": {
-    "leaflet": "^1.9.4",
-    "uplot": "^1.6.31",
-    "fit-file-parser": "^2.3.3"
+    "leaflet": "1.9.4",
+    "uplot": "1.6.32",
+    "fit-file-parser": "2.3.3"
   },
   "devDependencies": {
-    "esbuild": "latest",
-    "typescript": "latest",
-    "prettier": "latest",
-    "@types/leaflet": "^1.9.8"
+    "esbuild": "0.20.2",
+    "typescript": "5.9.3",
+    "prettier": "3.8.1",
+    "@types/leaflet": "1.9.21"
   }
 }

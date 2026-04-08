@@ -24,7 +24,7 @@ export const UrlState = (() => {
   // Internal state object, initialized from current URL.
   let _state: AppState = {};
   let _lastSearch: string | null = null;
-  let _syncTimeout: ReturnType<typeof setTimeout> | null = null;
+  let _syncTimeout: any = null;
 
   function read(): AppState {
     const p = new URLSearchParams(location.search);
@@ -145,7 +145,7 @@ export const UrlState = (() => {
     return { ..._state };
   }
 
-  function patch(partial: AppState) {
+  function patch(partial: Partial<Record<keyof AppState, any>>) {
     for (const [k, v] of Object.entries(partial)) {
       const key = k as keyof AppState;
       if (v === null || v === undefined) {
