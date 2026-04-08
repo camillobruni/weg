@@ -31,6 +31,7 @@ const ChartView = (() => {
   let isDragging    = false;
   let updatingRange = false;  // guard against setScale hook re-entry during handle drag
   let pinnedPtIdx   = null;   // point index pinned by map click
+  let lastMouseXVal = null;   // last hovered x-value for keyboard zoom center
 
   // Callbacks
   let onCursorMoveCb  = null;
@@ -60,6 +61,55 @@ const ChartView = (() => {
 
     document.getElementById('sel-cancel-btn')?.addEventListener('click', cancelSelection);
     resetSelBtn?.classList.add('hidden');
+
+    // ── WASD Keyboard Navigation ──
+    document.addEventListener('keydown', e => {
+      if (!plots.length || !currentTrack) return;
+      // Skip if user is typing in an input
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
+
+      const key = e.key.toLowerCase();
+      if (!['w', 'a', 's', 'd'].includes(key)) return;
+
+      e.preventDefault();
+      const u = plots[0].uplot;
+      const { min, max } = u.scales.x;
+      const span = max - min;
+      const moveStep = span * 0.1;
+      const zoomFactor = 0.2;
+
+      let newMin = min, newMax = max;
+
+      if (key === 'a') { // Pan left
+        newMin = min - moveStep;
+        newMax = max - moveStep;
+      } else if (key === 'd') { // Pan right
+        newMin = min + moveStep;
+        newMax = max + moveStep;
+      } else if (key === 'w' || key === 's') { // Zoom
+        const center = lastMouseXVal !== null ? lastMouseXVal : (min + max) / 2;
+        const factor = key === 'w' ? (1 - zoomFactor) : (1 + zoomFactor);
+        newMin = center - (center - min) * factor;
+        newMax = center + (max - center) * factor;
+      }
+
+      // Clamp to track bounds
+      const xFull = [plots[0].xData[0], plots[0].xData[plots[0].xData.length - 1]];
+      if (newMin < xFull[0]) {
+        const d = xFull[0] - newMin;
+        newMin += d; newMax += d;
+      }
+      if (newMax > xFull[1]) {
+        const d = newMax - xFull[1];
+        newMin -= d; newMax -= d;
+      }
+      newMin = Math.max(xFull[0], newMin);
+      newMax = Math.min(xFull[1], newMax);
+
+      if (newMax - newMin > 0.001) {
+        setSelectionRange(newMin, newMax);
+      }
+    });
   }
 
   // ── Public API ────────────────────────────────────────────────
@@ -441,6 +491,23 @@ const ChartView = (() => {
               drawVerticalLineOnly(u, pts, hIdx, 'rgba(255,255,255,0.4)');
             }
 
+            // ── Bold selection x-axis line ──
+            if (selAnchorVal != null && selEndVal != null) {
+              const ctx = u.ctx;
+              const dpr = window.devicePixelRatio || 1;
+              const bb  = u.bbox;
+              const ax  = u.valToPos(selAnchorVal, 'x', true);
+              const ex  = u.valToPos(selEndVal,    'x', true);
+              ctx.save();
+              ctx.beginPath();
+              ctx.lineWidth = 3 * dpr;
+              ctx.strokeStyle = def.color;
+              ctx.moveTo(ax, bb.top + bb.height);
+              ctx.lineTo(ex, bb.top + bb.height);
+              ctx.stroke();
+              ctx.restore();
+            }
+
             // 2. Draw label pills (on top)
             if (hasPinned) {
               drawXAxisLabels(u, pts, pinnedPtIdx, def.color, true); // true = skipLine
@@ -452,6 +519,13 @@ const ChartView = (() => {
         ],
         setCursor: [u => {
           const idx = u.cursor.idx;
+          
+          // Track current x-value for keyboard navigation
+          if (u.cursor.left >= 0) {
+            lastMouseXVal = u.posToVal(u.cursor.left, 'x');
+          } else {
+            lastMouseXVal = null;
+          }
 
           // ── Floating y-value next to cursor dot ──
           const curYValEl = u._strasse?.curYVal;
