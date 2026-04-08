@@ -2,7 +2,9 @@
 
 // ── Map View (Leaflet) ─────────────────────────────────────────────
 
-const MapView = (() => {
+import L from 'leaflet';
+
+export const MapView = (() => {
   let map, cursorMarker, highlightLine;
   let polylines = {};      // id → L.Polyline
   let trackData = {};      // id → track

@@ -3,7 +3,9 @@
 
 // ── Chart View (uPlot) ──────────────────────────────────────────────
 
-const ChartView = (() => {
+import uPlot from 'uplot';
+
+export const ChartView = (() => {
 
   // ── Metric definitions ─────────────────────────────────────────
   const METRICS = {

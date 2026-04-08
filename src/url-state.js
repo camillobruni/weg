@@ -4,7 +4,7 @@
 // Handles reading/writing application state to the URL.
 // Uses an incremental "patch" approach to preserve existing params.
 
-const UrlState = (() => {
+export const UrlState = (() => {
 
   // Internal state object, initialized from current URL.
   let _state = {};

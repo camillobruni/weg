@@ -4,7 +4,7 @@
 // Stores parsed track objects (not raw file bytes).
 // Tracks can be several MB each, so localStorage is unsuitable.
 
-const Storage = (() => {
+export const Storage = (() => {
   const DB_NAME    = 'strasse';
   const DB_VERSION = 1;
   const STORE      = 'tracks';

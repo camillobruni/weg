@@ -168,6 +168,12 @@ document.addEventListener('click', e => {
 });
 
 // ── Boot ──────────────────────────────────────────────────────────
+import { Storage } from './storage.js';
+import { UrlState } from './url-state.js';
+import { Parsers } from './parsers.js';
+import { MapView } from './map.js';
+import { ChartView } from './charts.js';
+
 async function init() {
   const urlState = UrlState.get();
 

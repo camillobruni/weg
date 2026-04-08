@@ -14,7 +14,9 @@
 //   lat/lon: degrees, ele: metres, time: ms epoch,
 //   speed: m/s, dist: cumulative metres
 
-const Parsers = (() => {
+import FitParser from 'fit-parser';
+
+export const Parsers = (() => {
 
   // ── Haversine distance (metres) ──────────────────────────────
   function haversine(lat1, lon1, lat2, lon2) {
