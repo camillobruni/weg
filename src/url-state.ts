@@ -18,6 +18,7 @@ export interface AppState {
   sort?: string;
   map_pos?: [number, number, number];
   sel?: [number, number];
+  tab?: string;
 }
 
 export const UrlState = (() => {
@@ -33,6 +34,7 @@ export const UrlState = (() => {
     if (p.has('track')) s.track = p.get('track')!;
     if (p.has('map')) s.map = p.get('map')!;
     if (p.has('xaxis')) s.xaxis = p.get('xaxis')!;
+    if (p.has('tab')) s.tab = p.get('tab')!;
     if (p.has('metrics')) s.metrics = p.get('metrics')!.split(',');
 
     if (p.has('f_date'))
@@ -86,6 +88,7 @@ export const UrlState = (() => {
       if (_state.track) p.set('track', _state.track);
       if (_state.map) p.set('map', _state.map);
       if (_state.xaxis) p.set('xaxis', _state.xaxis);
+      if (_state.tab) p.set('tab', _state.tab);
       if (_state.q) p.set('q', _state.q);
       if (_state.re) p.set('re', '1');
 

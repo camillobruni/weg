@@ -8,7 +8,8 @@ import { TrackData } from './parsers';
 export const Storage = (() => {
   const DB_NAME: string = 'weg-gps-db';
   const STORE_NAME: string = 'tracks';
-  const DB_VERSION: number = 1;
+  const SETTINGS_STORE: string = 'settings';
+  const DB_VERSION: number = 2;
 
   function openDB(): Promise<IDBDatabase> {
     return new Promise((resolve, reject) => {
@@ -17,6 +18,9 @@ export const Storage = (() => {
         const db = req.result;
         if (!db.objectStoreNames.contains(STORE_NAME)) {
           db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(SETTINGS_STORE)) {
+          db.createObjectStore(SETTINGS_STORE);
         }
       };
       req.onsuccess = () => resolve(req.result);
@@ -64,5 +68,25 @@ export const Storage = (() => {
     });
   }
 
-  return { save, getAll, remove, clear };
+  async function set(key: string, val: any): Promise<void> {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(SETTINGS_STORE, 'readwrite');
+      tx.objectStore(SETTINGS_STORE).put(val, key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async function get(key: string): Promise<any> {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(SETTINGS_STORE, 'readonly');
+      const req = tx.objectStore(SETTINGS_STORE).get(key);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  return { save, getAll, remove, clear, set, get };
 })();

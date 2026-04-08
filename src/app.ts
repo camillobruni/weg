@@ -6,7 +6,10 @@ import { Storage } from './storage';
 import { UrlState } from './url-state';
 import { Parsers, TrackData, TrackPoint } from './parsers';
 import { MapView } from './map';
-import { ChartView, MetricDefinition } from './charts';
+import { ChartView } from './charts';
+import { renderDetails } from './tabs/details';
+import { renderInsights, initInsights } from './tabs/insights';
+import { fmtSecs, escHtml } from './utils';
 
 const TRACK_COLORS: string[] = [
   '#FF6B35',
@@ -18,24 +21,26 @@ const TRACK_COLORS: string[] = [
   '#82E0AA',
   '#F8C471',
   '#3b82f6',
-  '#ec4899',
-  '#06b6d4',
-  '#10b981',
-  '#f59e0b',
-  '#ef4444',
-  '#8b5cf6',
 ];
 
+const POINT_ZOOM_LEVEL = 16;
+
 let tracks: Record<string, TrackData> = {};
-let colorIdx: number = 0;
 let selectedId: string | null = null;
+let colorIdx = 0;
+let currentUrlState = UrlState.get();
+let followDot = false;
 let currentMapColors: string[] | null = null;
-let chartHeight: number = 400; // pixels for chart panel
+
+// Search/Filter state
+let searchQuery = '';
+let searchRegex = false;
+let currentSort = 'date-desc';
 
 interface Filters {
-  date: (string | null)[];
-  dist: (number | null)[];
-  dur: (number | null)[];
+  date: [string | null, string | null];
+  dist: [number | null, number | null];
+  dur: [number | null, number | null];
   metrics: Set<string>;
 }
 
@@ -46,92 +51,12 @@ let filters: Filters = {
   metrics: new Set<string>(),
 };
 
-let searchQuery: string = '';
-let searchRegex: boolean = false;
-let currentSort: string = 'date-desc';
-let followDot: boolean = false;
-
-const POINT_ZOOM_LEVEL: number = 15;
-
-// ── UI Components ─────────────────────────────────────────────────
-function initResizeHandle() {
-  const handle = document.getElementById('resize-handle');
-  const panel = document.getElementById('chart-panel');
-  if (!handle || !panel) return;
-
-  let startY: number, startH: number;
-  const onMove = (e: MouseEvent | TouchEvent) => {
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    const dy = startY - clientY;
-    chartHeight = Math.max(100, Math.min(window.innerHeight - 200, startH + dy));
-    panel.style.height = `${chartHeight}px`;
-    ChartView.resize();
-  };
-  const onUp = () => {
-    document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onUp);
-    document.removeEventListener('touchmove', onMove);
-    document.removeEventListener('touchend', onUp);
-  };
-  handle.addEventListener('mousedown', (e) => {
-    startY = e.clientY;
-    startH = panel.offsetHeight;
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  });
-  handle.addEventListener('touchstart', (e) => {
-    startY = e.touches[0].clientY;
-    startH = panel.offsetHeight;
-    document.addEventListener('touchmove', onMove);
-    document.addEventListener('touchend', onUp);
-  });
-}
-
-function initSidebarResizer() {
-  const resizer = document.getElementById('sidebar-resizer');
-  const sidebar = document.getElementById('sidebar');
-  if (!resizer || !sidebar) return;
-
-  let startX: number, startW: number;
-
-  const onMove = (e: MouseEvent | TouchEvent) => {
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const newWidth = Math.max(150, Math.min(600, startW + (clientX - startX)));
-    document.documentElement.style.setProperty('--sidebar-w', `${newWidth}px`);
-
-    // Invalidate sub-view sizes as container changes
-    MapView.invalidateSize();
-    ChartView.resize();
-    updateToolbarLayout();
-  };
-
-  const onUp = () => {
-    resizer.classList.remove('dragging');
-    document.body.classList.remove('dragging-sidebar');
-    document.body.style.cursor = '';
-    document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onUp);
-    document.removeEventListener('touchmove', onMove);
-    document.removeEventListener('touchend', onUp);
-  };
-
-  resizer.addEventListener('mousedown', (e) => {
-    startX = e.clientX;
-    startW = sidebar.offsetWidth;
-    resizer.classList.add('dragging');
-    document.body.classList.add('dragging-sidebar');
-    document.body.style.cursor = 'col-resize';
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  });
-
-  resizer.addEventListener('touchstart', (e) => {
-    startX = e.touches[0].clientX;
-    startW = sidebar.offsetWidth;
-    resizer.classList.add('dragging');
-    document.body.classList.add('dragging-sidebar');
-    document.addEventListener('touchmove', onMove);
-    document.addEventListener('touchend', onUp);
+function syncFiltersToUrl() {
+  UrlState.patch({
+    f_date: filters.date.every((v) => v === null) ? null : filters.date,
+    f_dist: filters.dist.every((v) => v === null) ? null : filters.dist,
+    f_dur: filters.dur.every((v) => v === null) ? null : filters.dur,
+    f_mets: filters.metrics.size === 0 ? null : Array.from(filters.metrics),
   });
 }
 
@@ -140,6 +65,62 @@ function syncMetricsToUrl() {
   const metrics = ChartView.METRICS;
   const abbrs = Array.from(active).map((key) => metrics[key].abbr);
   UrlState.patch({ metrics: abbrs.length ? abbrs : null });
+}
+
+function showSortMenu(anchorEl: HTMLElement) {
+  document.querySelectorAll('.sort-menu-popup').forEach((el) => el.remove());
+
+  const popup = document.createElement('div');
+  popup.className = 'sort-menu-popup';
+
+  const options = [
+    { label: 'Newest first', val: 'date-desc', icon: 'calendar_today' },
+    { label: 'Oldest first', val: 'date-asc', icon: 'history' },
+    { label: 'Longest distance', val: 'dist-desc', icon: 'straighten' },
+    { label: 'Shortest distance', val: 'dist-asc', icon: 'horizontal_rule' },
+    { label: 'Longest duration', val: 'dur-desc', icon: 'timer' },
+    { label: 'Shortest duration', val: 'dur-asc', icon: 'timer_off' },
+  ];
+
+  options.forEach((opt) => {
+    const item = document.createElement('div');
+    item.className = `menu-item ${currentSort === opt.val ? 'active' : ''}`;
+    item.innerHTML = `
+      <span class="material-symbols-rounded">${opt.icon}</span>
+      <span class="item-label">${opt.label}</span>
+      <span class="material-symbols-rounded check">${currentSort === opt.val ? 'check' : ''}</span>
+    `;
+    item.addEventListener('click', () => {
+      currentSort = opt.val;
+      UrlState.patch({ sort: currentSort });
+      renderTrackList();
+      popup.remove();
+    });
+    popup.appendChild(item);
+  });
+
+  const rect = anchorEl.getBoundingClientRect();
+  popup.style.cssText = `
+    position: fixed;
+    z-index: 10000;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px;
+    min-width: 180px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    left: ${rect.left}px;
+    top: ${rect.bottom + 4}px;
+  `;
+  document.body.appendChild(popup);
+
+  const dismiss = (e: MouseEvent) => {
+    if (!popup.contains(e.target as Node) && e.target !== anchorEl) {
+      popup.remove();
+      document.removeEventListener('click', dismiss);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', dismiss), 10);
 }
 
 function showMetricMenu(anchorEl: HTMLElement) {
@@ -218,6 +199,9 @@ document.addEventListener('click', (e) => {
   // Toggle buttons
   nav.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b === btn));
 
+  const tab = btn.dataset.tab!;
+  UrlState.patch({ tab });
+
   // Toggle contents
   const panel = nav.closest('#chart-panel');
   if (panel) {
@@ -230,6 +214,10 @@ document.addEventListener('click', (e) => {
     renderDetails(tracks[selectedId]);
   }
 
+  if (btn.dataset.tab === 'insights' && selectedId && tracks[selectedId]) {
+    renderInsights(tracks[selectedId]);
+  }
+
   if (btn.dataset.tab === 'graphs') {
     ChartView.resize();
     updateToolbarLayout();
@@ -239,6 +227,8 @@ document.addEventListener('click', (e) => {
 // ── Boot ──────────────────────────────────────────────────────────
 async function init() {
   const urlState = UrlState.get();
+
+  initInsights(showToast);
 
   // Init sub-systems
   MapView.init((id) => selectTrack(id), onMapMove, onMapPointClick, onMapDblClick);
@@ -276,6 +266,16 @@ async function init() {
     MapView.setPosition(lat, lng, zoom);
   }
 
+  // Restore tab
+  if (urlState.tab) {
+    document.querySelectorAll('.tab-btn').forEach((btn) => {
+      const b = btn as HTMLElement;
+      if (b.dataset.tab === urlState.tab) {
+        b.click();
+      }
+    });
+  }
+
   // Restore x-axis mode
   if (urlState.xaxis) {
     ChartView.setXAxis(urlState.xaxis);
@@ -295,9 +295,9 @@ async function init() {
   }
 
   // Restore filters
-  if (urlState.f_date) filters.date = urlState.f_date.map((v) => v || null);
-  if (urlState.f_dist) filters.dist = urlState.f_dist.map((v) => (v === 0 ? 0 : v || null));
-  if (urlState.f_dur) filters.dur = urlState.f_dur.map((v) => (v === 0 ? 0 : v || null));
+  if (urlState.f_date) filters.date = urlState.f_date.map((v) => v || null) as [string | null, string | null];
+  if (urlState.f_dist) filters.dist = urlState.f_dist.map((v) => (v === 0 ? 0 : v || null)) as [number | null, number | null];
+  if (urlState.f_dur) filters.dur = urlState.f_dur.map((v) => (v === 0 ? 0 : v || null)) as [number | null, number | null];
   if (urlState.f_mets) filters.metrics = new Set(urlState.f_mets);
   updateFilterUI();
 
@@ -308,9 +308,21 @@ async function init() {
 
   // Load persisted tracks
   try {
+    // Load global settings
+    const hrZones = await Storage.get('hr_zones');
+    if (hrZones) Parsers.setHRZones(hrZones);
+
+    const ftp = await Storage.get('ftp');
+    if (ftp) Parsers.setFTP(ftp);
+
     const saved = await Storage.getAll();
     saved.sort((a, b) => a.addedAt - b.addedAt);
     for (const t of saved) {
+      // Migration: re-calculate stats if new insights are missing
+      if (!t.stats.powerCurve && !t.stats.hrZones) {
+        t.stats = Parsers.computeStats(t.points);
+        await Storage.save(t);
+      }
       tracks[t.id] = t;
       colorIdx = Math.max(colorIdx, TRACK_COLORS.indexOf(t.color) + 1);
       MapView.addTrack(t);
@@ -521,32 +533,98 @@ async function init() {
   });
 }
 
-function syncFiltersToUrl() {
-  UrlState.patch({
-    f_date: filters.date.every((v) => v === null) ? null : filters.date.map((v) => v || ''),
-    f_dist: filters.dist.every((v) => v === null) ? null : filters.dist.map((v) => v || null),
-    f_dur: filters.dur.every((v) => v === null) ? null : filters.dur.map((v) => v || null),
-    f_mets: filters.metrics.size === 0 ? null : Array.from(filters.metrics),
+function initResizeHandle() {
+  const handle = document.getElementById('resize-handle');
+  const panel = document.getElementById('chart-panel');
+  if (!handle || !panel) return;
+
+  let startY: number, startH: number;
+
+  const onMove = (e: MouseEvent | TouchEvent) => {
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    const diff = startY - clientY;
+    const newHeight = Math.max(100, Math.min(window.innerHeight - 100, startH + diff));
+    panel.style.height = `${newHeight}px`;
+    ChartView.resize();
+  };
+
+  const onUp = () => {
+    document.body.classList.remove('dragging-resizer');
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    document.removeEventListener('touchmove', onMove);
+    document.removeEventListener('touchend', onUp);
+  };
+
+  handle.addEventListener('mousedown', (e) => {
+    startY = e.clientY;
+    startH = panel.offsetHeight;
+    document.body.classList.add('dragging-resizer');
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+
+  handle.addEventListener('touchstart', (e) => {
+    startY = e.touches[0].clientY;
+    startH = panel.offsetHeight;
+    document.body.classList.add('dragging-resizer');
+    document.addEventListener('touchmove', onMove);
+    document.addEventListener('touchend', onUp);
+  });
+}
+
+function initSidebarResizer() {
+  const resizer = document.getElementById('sidebar-resizer');
+  const sidebar = document.getElementById('sidebar');
+  if (!resizer || !sidebar) return;
+
+  let startX: number, startW: number;
+
+  const onMove = (e: MouseEvent | TouchEvent) => {
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const newWidth = Math.max(150, Math.min(600, startW + (clientX - startX)));
+    document.documentElement.style.setProperty('--sidebar-w', `${newWidth}px`);
+
+    // Invalidate sub-view sizes as container changes
+    MapView.invalidateSize();
+    ChartView.resize();
+    updateToolbarLayout();
+  };
+
+  const onUp = () => {
+    resizer.classList.remove('dragging');
+    document.body.classList.remove('dragging-sidebar');
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    document.removeEventListener('touchmove', onMove);
+    document.removeEventListener('touchend', onUp);
+  };
+
+  resizer.addEventListener('mousedown', (e) => {
+    startX = e.clientX;
+    startW = sidebar.offsetWidth;
+    resizer.classList.add('dragging');
+    document.body.classList.add('dragging-sidebar');
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+
+  resizer.addEventListener('touchstart', (e) => {
+    startX = e.touches[0].clientX;
+    startW = sidebar.offsetWidth;
+    resizer.classList.add('dragging');
+    document.body.classList.add('dragging-sidebar');
+    document.addEventListener('touchmove', onMove);
+    document.addEventListener('touchend', onUp);
   });
 }
 
 function applyFilters() {
-  const ids = Object.keys(tracks);
-
-  let regex: RegExp | null = null;
-  if (searchRegex && searchQuery) {
-    try {
-      regex = new RegExp(searchQuery, 'i');
-    } catch (e) {}
-  }
   const query = searchQuery.toLowerCase();
+  const regex = searchRegex ? new RegExp(searchQuery, 'i') : null;
 
-  ids.forEach((id) => {
-    const t = tracks[id];
+  Object.values(tracks).forEach((t) => {
     const s = t.stats;
-    const pts = t.points;
-    const date =
-      pts.length && pts[0].time ? new Date(pts[0].time).toISOString().split('T')[0] : null;
 
     let visible = true;
 
@@ -560,20 +638,27 @@ function applyFilters() {
     }
 
     // Date filter
-    if (visible && filters.date[0] && date && date < filters.date[0]) visible = false;
-    if (visible && filters.date[1] && date && date > filters.date[1]) visible = false;
+    if (visible && (filters.date[0] || filters.date[1])) {
+      const start = filters.date[0] ? new Date(filters.date[0]).getTime() : 0;
+      const end = filters.date[1] ? new Date(filters.date[1]).getTime() : Infinity;
+      const t0 = s.startTime || 0;
+      if (t0 < start || t0 > end) visible = false;
+    }
 
-    // Distance filter (m to km)
-    const distKm = s.totalDist ? s.totalDist / 1000 : 0;
-    if (visible && filters.dist[0] !== null && distKm < (filters.dist[0] as number))
-      visible = false;
-    if (visible && filters.dist[1] !== null && distKm > (filters.dist[1] as number))
-      visible = false;
+    // Distance filter
+    if (visible && (filters.dist[0] !== null || filters.dist[1] !== null)) {
+      const min = (filters.dist[0] || 0) * 1000;
+      const max = (filters.dist[1] || Infinity) * 1000;
+      if (s.totalDist < min || s.totalDist > max) visible = false;
+    }
 
-    // Duration filter (s to h)
-    const durH = s.duration ? s.duration / 3600000 : 0;
-    if (visible && filters.dur[0] !== null && durH < (filters.dur[0] as number)) visible = false;
-    if (visible && filters.dur[1] !== null && durH > (filters.dur[1] as number)) visible = false;
+    // Duration filter
+    if (visible && (filters.dur[0] !== null || filters.dur[1] !== null)) {
+      const min = (filters.dur[0] || 0) * 60000;
+      const max = (filters.dur[1] || Infinity) * 60000;
+      const d = s.duration || 0;
+      if (d < min || d > max) visible = false;
+    }
 
     // Metrics filter
     if (visible && filters.metrics.size > 0) {
@@ -587,68 +672,51 @@ function applyFilters() {
     }
 
     t._filtered = !visible;
-    MapView.setTrackVisible(id, visible && t.visible);
+    MapView.setTrackVisible(t.id, t.visible && visible);
   });
 
   renderTrackList();
-
-  // If selected track is filtered out, clear charts
-  if (selectedId && tracks[selectedId]._filtered) {
-    ChartView.clear();
-    const details = document.getElementById('details-view');
-    if (details)
-      details.innerHTML = `
-      <div id="details-empty" class="empty-state">
-        <span class="material-symbols-rounded empty-icon">no_sim</span>
-        <div class="empty-text">Select a track for details</div>
-      </div>
-    `;
-  }
 }
 
 function updateFilterUI() {
   (document.getElementById('filter-date-start') as HTMLInputElement).value = filters.date[0] || '';
   (document.getElementById('filter-date-end') as HTMLInputElement).value = filters.date[1] || '';
   (document.getElementById('filter-dist-min') as HTMLInputElement).value =
-    filters.dist[0]?.toString() || '';
+    filters.dist[0] !== null ? String(filters.dist[0]) : '';
   (document.getElementById('filter-dist-max') as HTMLInputElement).value =
-    filters.dist[1]?.toString() || '';
+    filters.dist[1] !== null ? String(filters.dist[1]) : '';
   (document.getElementById('filter-dur-min') as HTMLInputElement).value =
-    filters.dur[0]?.toString() || '';
+    filters.dur[0] !== null ? String(filters.dur[0]) : '';
   (document.getElementById('filter-dur-max') as HTMLInputElement).value =
-    filters.dur[1]?.toString() || '';
+    filters.dur[1] !== null ? String(filters.dur[1]) : '';
 
   document.querySelectorAll('#filter-metrics .mini-pill').forEach((el) => {
     const btn = el as HTMLElement;
     btn.classList.toggle('active', filters.metrics.has(btn.dataset.metric!));
   });
-}
 
-function updateSearchSortUI() {
-  const searchEl = document.getElementById('track-search') as HTMLInputElement;
-  if (searchEl) searchEl.value = searchQuery;
+  const activeCount =
+    (filters.date[0] ? 1 : 0) +
+    (filters.date[1] ? 1 : 0) +
+    (filters.dist[0] !== null ? 1 : 0) +
+    (filters.dist[1] !== null ? 1 : 0) +
+    (filters.dur[0] !== null ? 1 : 0) +
+    (filters.dur[1] !== null ? 1 : 0) +
+    filters.metrics.size;
 
-  const regexBtn = document.getElementById('btn-regex-toggle');
-  if (regexBtn) regexBtn.classList.toggle('active', searchRegex);
-
-  const labelEl = document.getElementById('sort-current-label');
-  const iconEl = document.getElementById('sort-current-icon');
-
-  if (!labelEl || !iconEl) return;
-
-  if (currentSort.startsWith('date')) {
-    labelEl.textContent = 'Date';
-    iconEl.textContent = 'calendar_today';
-  } else if (currentSort.startsWith('dist')) {
-    labelEl.textContent = 'Distance';
-    iconEl.textContent = 'route';
-  } else if (currentSort.startsWith('dur')) {
-    labelEl.textContent = 'Duration';
-    iconEl.textContent = 'schedule';
+  const badge = document.querySelector('#btn-toggle-filters .btn-badge');
+  if (badge) {
+    badge.textContent = activeCount > 0 ? String(activeCount) : '';
+    badge.classList.toggle('hidden', activeCount === 0);
   }
 }
 
-// ── Track list UI ─────────────────────────────────────────────────
+function updateSearchSortUI() {
+  const searchInput = document.getElementById('track-search') as HTMLInputElement;
+  if (searchInput) searchInput.value = searchQuery;
+  document.getElementById('btn-regex-toggle')?.classList.toggle('active', searchRegex);
+}
+
 function renderTrackList() {
   const list = document.getElementById('track-list');
   const emptyEl = document.getElementById('track-list-empty') as HTMLElement;
@@ -752,65 +820,6 @@ function buildTrackItem(track: TrackData) {
   return item;
 }
 
-function showSortMenu(anchorEl: HTMLElement) {
-  document.querySelectorAll('.sort-menu-popup').forEach((el) => el.remove());
-
-  const popup = document.createElement('div');
-  popup.className = 'sort-menu-popup';
-
-  const options = [
-    { value: 'date-desc', label: 'Date (Newest)', icon: 'calendar_today', arrow: 'arrow_downward' },
-    { value: 'date-asc', label: 'Date (Oldest)', icon: 'calendar_today', arrow: 'arrow_upward' },
-    { value: 'dist-desc', label: 'Distance (Longest)', icon: 'route', arrow: 'arrow_downward' },
-    { value: 'dist-asc', label: 'Distance (Shortest)', icon: 'route', arrow: 'arrow_upward' },
-    { value: 'dur-desc', label: 'Duration (Longest)', icon: 'schedule', arrow: 'arrow_downward' },
-    { value: 'dur-asc', label: 'Duration (Shortest)', icon: 'schedule', arrow: 'arrow_upward' },
-  ];
-
-  options.forEach((opt) => {
-    const isActive = currentSort === opt.value;
-    const item = document.createElement('div');
-    item.className = `menu-item ${isActive ? 'active' : ''}`;
-    item.innerHTML = `
-      <span class="material-symbols-rounded">${opt.icon}</span>
-      <span class="item-label">${opt.label}</span>
-      <span class="material-symbols-rounded arrow">${opt.arrow}</span>
-    `;
-
-    item.addEventListener('click', () => {
-      currentSort = opt.value;
-      updateSearchSortUI();
-      renderTrackList();
-      UrlState.patch({ sort: currentSort });
-      popup.remove();
-    });
-    popup.appendChild(item);
-  });
-
-  const rect = anchorEl.getBoundingClientRect();
-  popup.style.cssText = `
-    position: fixed;
-    z-index: 10000;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 6px;
-    min-width: 180px;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
-    left: ${rect.left}px;
-    top: ${rect.bottom + 4}px;
-  `;
-  document.body.appendChild(popup);
-
-  const dismiss = (e: MouseEvent) => {
-    if (!popup.contains(e.target as Node) && e.target !== anchorEl) {
-      popup.remove();
-      document.removeEventListener('click', dismiss);
-    }
-  };
-  setTimeout(() => document.addEventListener('click', dismiss), 10);
-}
-
 // ── Track actions ─────────────────────────────────────────────────
 function selectTrack(id: string, fit = true) {
   if (!tracks[id]) return;
@@ -830,6 +839,7 @@ function selectTrack(id: string, fit = true) {
   const activeTabBtn = document.querySelector('.tab-btn.active') as HTMLElement;
   const activeTab = activeTabBtn ? activeTabBtn.dataset.tab : 'graphs';
   if (activeTab === 'details') renderDetails(tracks[id]);
+  if (activeTab === 'insights') renderInsights(tracks[id]);
 
   // Tell sub-views
   MapView.setSelectedTrack(id, fit);
@@ -870,6 +880,29 @@ async function clearAll() {
   applyFilters();
 }
 
+function initDropZone() {
+  const zone = document.getElementById('track-list');
+  if (!zone) return;
+
+  window.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    zone.classList.add('drag-over');
+  });
+
+  window.addEventListener('dragleave', (e) => {
+    if (e.relatedTarget === null) {
+      zone.classList.remove('drag-over');
+    }
+  });
+
+  window.addEventListener('drop', (e) => {
+    e.preventDefault();
+    zone.classList.remove('drag-over');
+    const files = Array.from(e.dataTransfer?.files || []);
+    if (files.length) handleFiles(files);
+  });
+}
+
 async function handleFiles(files: File[]) {
   if (!files.length) return;
   let count = 0;
@@ -896,161 +929,9 @@ async function handleFiles(files: File[]) {
     }
   }
   if (count > 0) {
+    showToast(`Added ${count} track${count > 1 ? 's' : ''}`);
     applyFilters();
-    if (count === 1) {
-      const lastId = Object.keys(tracks).pop();
-      if (lastId) selectTrack(lastId);
-    } else {
-      MapView.fitAll();
-    }
-    showToast(`Loaded ${count} track${count > 1 ? 's' : ''}`);
   }
-}
-
-// ── Drag & Drop ───────────────────────────────────────────────────
-function readDirEntries(reader: any): Promise<any[]> {
-  return new Promise((resolve, reject) => {
-    const results: any[] = [];
-    const readBatch = () =>
-      reader.readEntries((batch: any[]) => {
-        if (!batch.length) {
-          resolve(results);
-          return;
-        }
-        results.push(...batch);
-        readBatch();
-      }, reject);
-    readBatch();
-  });
-}
-
-async function collectEntry(entry: any): Promise<File[]> {
-  if (entry.isFile) {
-    return new Promise((resolve, reject) => entry.file(resolve, reject)).then((f) => [f as File]);
-  }
-  const reader = entry.createReader();
-  const entries = await readDirEntries(reader);
-  const results = await Promise.allSettled(entries.map(collectEntry));
-  return results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
-}
-
-async function collectDroppedFiles(dataTransfer: DataTransfer): Promise<File[]> {
-  // entries must be captured synchronously before the event is released
-  const items = Array.from(dataTransfer.items || []);
-  const entries = items.map((i) => i.webkitGetAsEntry?.()).filter(Boolean);
-
-  if (entries.length) {
-    const results = await Promise.allSettled(entries.map(collectEntry));
-    return results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
-  }
-  return Array.from(dataTransfer.files);
-}
-
-function initDropZone() {
-  const zone = document.getElementById('drop-zone');
-  if (!zone) return;
-
-  zone.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    zone.className = 'drop-active';
-  });
-  zone.addEventListener('dragleave', () => {
-    zone.className = 'drop-idle';
-  });
-  zone.addEventListener('drop', async (e) => {
-    e.preventDefault();
-    zone.className = 'drop-idle';
-    if (e.dataTransfer) {
-      const files = await collectDroppedFiles(e.dataTransfer);
-      handleFiles(files);
-    }
-  });
-
-  zone.addEventListener('click', (e) => {
-    const input = document.getElementById('file-input');
-    if (!input) return;
-    // If user clicked the folder-input or its label, let the browser handle it.
-    if (
-      (e.target as HTMLElement).closest('#folder-label') ||
-      (e.target as HTMLElement).closest('#folder-input')
-    ) {
-      return;
-    }
-    if (e.target !== input) input.click();
-  });
-}
-
-// ── Helpers ───────────────────────────────────────────────────
-function renderDetails(track: TrackData) {
-  const container = document.getElementById('details-view');
-  if (!container) return;
-
-  const s = track.stats;
-  const date =
-    track.points.length && track.points[0].time
-      ? new Date(track.points[0].time).toLocaleString()
-      : '—';
-
-  container.innerHTML = `
-    <div id="details-header">
-      <div class="details-title">${escHtml(track.name)}</div>
-      <div class="details-subtitle">${date} ${track.device ? '· ' + escHtml(track.device) : ''}</div>
-    </div>
-    <div class="details-grid">
-      <div class="details-card">
-        <span class="material-symbols-rounded">route</span>
-        <div class="details-card-label">Distance</div>
-        <div class="details-card-value">${(s.totalDist / 1000).toFixed(2)} km</div>
-      </div>
-      <div class="details-card">
-        <span class="material-symbols-rounded">schedule</span>
-        <div class="details-card-label">Duration</div>
-        <div class="details-card-value">${s.duration ? fmtSecs(Math.floor(s.duration / 1000)) : '—'}</div>
-      </div>
-      <div class="details-card">
-        <span class="material-symbols-rounded">height</span>
-        <div class="details-card-label">Elevation</div>
-        <div class="details-card-value">+${Math.round(s.elevGain)}m / -${Math.round(s.elevLoss)}m</div>
-      </div>
-      <div class="details-card">
-        <span class="material-symbols-rounded">speed</span>
-        <div class="details-card-label">Avg Speed</div>
-        <div class="details-card-value">${s.avgSpeed ? (s.avgSpeed * 3.6).toFixed(1) : '—'} km/h</div>
-      </div>
-      ${
-        s.avgPower
-          ? `
-      <div class="details-card">
-        <span class="material-symbols-rounded">bolt</span>
-        <div class="details-card-label">Avg Power</div>
-        <div class="details-card-value">${s.avgPower} W (Max ${s.maxPower}W)</div>
-      </div>`
-          : ''
-      }
-      ${
-        s.avgHR
-          ? `
-      <div class="details-card">
-        <span class="material-symbols-rounded">favorite</span>
-        <div class="details-card-label">Avg HR</div>
-        <div class="details-card-value">${s.avgHR} bpm (Max ${s.maxHR}bpm)</div>
-      </div>`
-          : ''
-      }
-    </div>
-  `;
-}
-
-function fmtSecs(s: number) {
-  const h = Math.floor(s / 3600),
-    m = Math.floor((s % 3600) / 60);
-  return h > 0 ? `${h}h ${m}m` : `${m}m ${s % 60}s`;
-}
-
-function escHtml(str: string) {
-  const p = document.createElement('p');
-  p.textContent = str;
-  return p.innerHTML;
 }
 
 // ── Chart Callbacks ───────────────────────────────────────────────
@@ -1160,7 +1041,7 @@ function initMetricPillDraggable() {
     e.dataTransfer!.effectAllowed = 'move';
     target.classList.add('dragging-pill');
     // For transparent background in ghost image
-    setTimeout(() => target.style.opacity = '0.4', 0);
+    setTimeout(() => (target.style.opacity = '0.4'), 0);
   });
 
   container.addEventListener('dragover', (e) => {
@@ -1169,7 +1050,7 @@ function initMetricPillDraggable() {
     const target = (e.target as HTMLElement).closest('.metric-pill') as HTMLElement;
     if (target && target !== draggedEl) {
       const rect = target.getBoundingClientRect();
-      const next = (e.clientX - rect.left) > (rect.width / 2);
+      const next = e.clientX - rect.left > rect.width / 2;
       container.insertBefore(draggedEl!, next ? target.nextSibling : target);
     }
   });

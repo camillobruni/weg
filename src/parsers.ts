@@ -30,6 +30,9 @@ export interface TrackStats {
   avgCadence: number | null;
   sensors: string[];
   startTime?: number | null;
+  powerCurve?: Record<number, { power: number; idx: number }> | null;
+  hrZones?: number[] | null; // Time in seconds for each zone
+  powerZones?: number[] | null; // Time in seconds for each zone
 }
 
 export interface TrackData {
@@ -95,6 +98,9 @@ export const Parsers = (() => {
   }
 
   // ── Compute stats ─────────────────────────────────────────────
+  let hrZoneThresholds = [120, 140, 160, 180];
+  let ftp = 200;
+
   function computeStats(pts: TrackPoint[]): TrackStats {
     const stats: TrackStats = {
       totalDist: 0,
@@ -168,12 +174,114 @@ export const Parsers = (() => {
       stats.duration = t1 - t0;
     }
 
-    if (hrN) stats.sensors.push('Heart Rate');
+    if (hrN) {
+      stats.sensors.push('Heart Rate');
+      stats.hrZones = calculateHRZones(pts);
+    }
     if (cadN) stats.sensors.push('Cadence');
-    if (powerN) stats.sensors.push('Power');
+    if (powerN) {
+      stats.sensors.push('Power');
+      stats.powerCurve = calculatePowerCurve(pts);
+      stats.powerZones = calculatePowerZones(pts);
+    }
     if (hasTemp) stats.sensors.push('Temperature');
 
     return stats;
+    }
+
+    function calculatePowerZones(pts: TrackPoint[]) {
+    const zones = [0, 0, 0, 0, 0, 0, 0];
+    // Coggan Zones: <55%, 55-75%, 75-90%, 90-105%, 105-120%, 120-150%, >150%
+    const thresholds = [0.55, 0.75, 0.9, 1.05, 1.2, 1.5].map((t) => t * ftp);
+
+    for (let i = 1; i < pts.length; i++) {
+      const p = pts[i];
+      const prev = pts[i - 1];
+      if (p.power == null || p.time == null || prev.time == null) continue;
+
+      const dt = (p.time - prev.time) / 1000;
+      if (dt <= 0 || dt > 10) continue;
+
+      const pw = p.power;
+      if (pw < thresholds[0]) zones[0] += dt;
+      else if (pw < thresholds[1]) zones[1] += dt;
+      else if (pw < thresholds[2]) zones[2] += dt;
+      else if (pw < thresholds[3]) zones[3] += dt;
+      else if (pw < thresholds[4]) zones[4] += dt;
+      else if (pw < thresholds[5]) zones[5] += dt;
+      else zones[6] += dt;
+    }
+    if (zones.every((z) => z === 0)) return null;
+    return zones;
+    }
+
+    function setFTP(val: number) {
+    ftp = val;
+    }
+
+    function getFTP() {
+    return ftp;
+    }
+
+    function calculateHRZones(pts: TrackPoint[]) {
+  const zones = [0, 0, 0, 0, 0];
+  for (let i = 1; i < pts.length; i++) {
+    const p = pts[i];
+    const prev = pts[i - 1];
+    if (p.hr == null || p.time == null || prev.time == null) continue;
+
+    const dt = (p.time - prev.time) / 1000;
+    if (dt <= 0 || dt > 10) continue; // Skip gaps
+
+    const hr = p.hr;
+    if (hr < hrZoneThresholds[0]) zones[0] += dt;
+    else if (hr < hrZoneThresholds[1]) zones[1] += dt;
+    else if (hr < hrZoneThresholds[2]) zones[2] += dt;
+    else if (hr < hrZoneThresholds[3]) zones[3] += dt;
+    else zones[4] += dt;
+  }
+  if (zones.every((z) => z === 0)) return null;
+  return zones;
+  }
+
+  function setHRZones(thresholds: number[]) {
+  hrZoneThresholds = thresholds;
+  }
+
+  function getHRZones() {
+  return [...hrZoneThresholds];
+  }
+
+  function calculatePowerCurve(pts: TrackPoint[]) {
+    const powerData = pts.map((p) => p.power || 0);
+    if (powerData.every((p) => p === 0)) return null;
+
+    const durations = [1, 5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600];
+    const curve: Record<number, { power: number; idx: number }> = {};
+
+    durations.forEach((d) => {
+      if (d > powerData.length) return;
+      let maxAvg = 0;
+      let bestIdx = 0;
+      let currentSum = 0;
+
+      for (let i = 0; i < powerData.length; i++) {
+        currentSum += powerData[i];
+        if (i >= d) {
+          currentSum -= powerData[i - d];
+        }
+        if (i >= d - 1) {
+          const avg = currentSum / d;
+          if (avg > maxAvg) {
+            maxAvg = avg;
+            bestIdx = i - d + 1;
+          }
+        }
+      }
+      curve[d] = { power: Math.round(maxAvg), idx: bestIdx };
+    });
+
+    return curve;
   }
 
   // ── GPX parser ────────────────────────────────────────────────
@@ -483,5 +591,5 @@ export const Parsers = (() => {
     }
   }
 
-  return { parseFile };
+  return { parseFile, computeStats, setHRZones, getHRZones, setFTP, getFTP };
 })();
