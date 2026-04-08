@@ -43,7 +43,7 @@ const UrlState = (() => {
 
     // Add comma-separated params (literal commas)
     if (_state.map) {
-      const val = _state.map[0].toFixed(5) + ',' + _state.map[1].toFixed(5) + ',' + _state.map[2];
+      const val = (+_state.map[0]).toFixed(5) + ',' + (+_state.map[1]).toFixed(5) + ',' + _state.map[2];
       search += (search ? '&' : '') + 'map=' + val;
     }
     if (_state.sel) {

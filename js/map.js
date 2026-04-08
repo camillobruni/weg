@@ -37,18 +37,20 @@ const MapView = (() => {
     ),
   };
 
-  let onMoveCb = null;
+  let onSelectCb, onMoveCb, onPointClickCb, onDblClickCb;
 
-  function init(onSelect, onMove, onPointClick) {
+  function init(onSelect, onMove, onPointClick, onDblClick) {
     onSelectCb     = onSelect;
     onMoveCb       = onMove;
     onPointClickCb = onPointClick;
+    onDblClickCb   = onDblClick;
 
     map = L.map('map', {
       center: [46.8, 8.3],
       zoom: 8,
       zoomControl: true,
       attributionControl: true,
+      doubleClickZoom: false, // Disable default so we can use it
     });
 
     LAYERS.swisstopo.addTo(map);
@@ -59,6 +61,11 @@ const MapView = (() => {
 
     // Map click → find nearest tracks
     map.on('click', handleMapClick);
+
+    // Map dblclick → callback (e.g., clear highlights)
+    map.on('dblclick', () => {
+      if (onDblClickCb) onDblClickCb();
+    });
 
     // Mouse position in status bar
     map.on('mousemove', e => {
@@ -306,10 +313,14 @@ const MapView = (() => {
     if (cursorMarker && map.hasLayer(cursorMarker)) map.removeLayer(cursorMarker);
   }
 
-  function centerOn(lat, lon) {
+  function centerOn(lat, lon, zoom) {
     // Ensure Leaflet has the latest container dimensions before centering
     map.invalidateSize();
-    map.panTo([lat, lon], { animate: true });
+    if (zoom) {
+      map.setView([lat, lon], zoom, { animate: true });
+    } else {
+      map.panTo([lat, lon], { animate: true });
+    }
   }
 
   function invalidateSize() {

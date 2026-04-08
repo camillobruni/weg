@@ -8,6 +8,8 @@ const TRACK_COLORS = [
   '#06b6d4','#84cc16','#f97316','#a78bfa','#fb7185',
 ];
 
+const POINT_ZOOM_LEVEL = 15; // Zoom level when clicking on chart point
+
 let tracks = {};       // id → track
 let colorIdx = 0;
 let selectedId = null;
@@ -43,7 +45,7 @@ document.addEventListener('click', e => {
   const urlState = UrlState.get();
 
   // Init sub-systems
-  MapView.init(selectTrack, onMapMove, onMapPointClick);
+  MapView.init(selectTrack, onMapMove, onMapPointClick, onMapDblClick);
   ChartView.init(onChartCursorMove, onChartRangeChange, onChartClick);
 
   // Restore basemap
@@ -395,7 +397,7 @@ function selectTrack(id, fit = true) {
   if (activeTab === 'details') renderDetails(tracks[id]);
 
   // Tell sub-views
-  MapView.selectTrack(id, fit);
+  MapView.setSelectedTrack(id, fit);
   ChartView.loadTrack(tracks[id]);
 }
 
@@ -463,26 +465,51 @@ function renderDetails(track) {
 
 // ── Chart Callbacks ───────────────────────────────────────────────
 function onChartCursorMove(pt) {
-  MapView.highlightPoint(pt);
+  MapView.showCursorAt(pt.lat, pt.lon);
 }
 
 function onChartRangeChange(minX, maxX, xAxis) {
   UrlState.patch({ sel: (minX != null && maxX != null) ? [minX, maxX] : null });
-  MapView.highlightRange(selectedId, minX, maxX, xAxis);
+  const track = tracks[selectedId];
+  if (!track || minX == null || maxX == null) {
+    MapView.clearHighlight();
+    return;
+  }
+  const pts = track.points;
+  let iMin, iMax;
+  if (xAxis === 'distance') {
+    const dMin = minX * 1000, dMax = maxX * 1000;
+    iMin = pts.findIndex(p => (p.dist || 0) >= dMin);
+    iMax = pts.findLastIndex(p => (p.dist || 0) <= dMax);
+  } else {
+    const t0 = pts[0].time || 0;
+    const tMin = t0 + minX * 1000, tMax = t0 + maxX * 1000;
+    iMin = pts.findIndex(p => p.time >= tMin);
+    iMax = pts.findLastIndex(p => p.time <= tMax);
+  }
+  if (iMin !== -1 && iMax !== -1 && iMin < iMax) {
+    MapView.highlightSegment(selectedId, pts, iMin, iMax, true);
+  } else {
+    MapView.clearHighlight();
+  }
 }
 
 function onChartClick(pt) {
-  MapView.panTo(pt.lat, pt.lng);
+  MapView.centerOn(pt.lat, pt.lon, POINT_ZOOM_LEVEL);
 }
 
 // ── Map Callbacks ─────────────────────────────────────────────────
 function onMapMove(lat, lng, zoom) {
-  UrlState.patch({ map: [lat.toFixed(6), lng.toFixed(6), zoom] });
+  UrlState.patch({ map: [lat, lng, zoom] });
 }
 
 function onMapPointClick(trackId, ptIdx) {
   if (trackId !== selectedId) selectTrack(trackId, false);
-  ChartView.pinPoint(ptIdx);
+  ChartView.setCursorAt(ptIdx);
+}
+
+function onMapDblClick() {
+  ChartView.clearPinnedDot();
 }
 
 // ── Helpers ───────────────────────────────────────────────────────
