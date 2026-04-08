@@ -226,11 +226,11 @@ const Parsers = (() => {
   // ── FIT parser ────────────────────────────────────────────────
   function parseFIT(buf) {
     return new Promise((resolve, reject) => {
-      if (typeof EasyFit === 'undefined') {
+      if (typeof FitParser === 'undefined') {
         reject(new Error('FIT parser not loaded. Check your connection.'));
         return;
       }
-      const fit = new EasyFit({ force: true, speedUnit: 'km/h', lengthUnit: 'm', temperatureUnit: 'celsius', elapsedRecordField: false, mode: 'cascade' });
+      const fit = new FitParser({ force: true, speedUnit: 'km/h', lengthUnit: 'm', temperatureUnit: 'celsius', elapsedRecordField: false, mode: 'cascade' });
       fit.parse(buf, (err, data) => {
         if (err) { reject(new Error('FIT parse error: ' + err)); return; }
         try {

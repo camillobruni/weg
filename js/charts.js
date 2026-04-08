@@ -7,13 +7,13 @@ const ChartView = (() => {
 
   // ── Metric definitions ─────────────────────────────────────────
   const METRICS = {
-    elevation:   { label: 'Elevation',   icon: 'height',    unit: 'm',    color: '#4ECDC4', field: 'ele',      fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} m`,     fmtAxis: v => v.toFixed(0),  transform: null },
-    speed:       { label: 'Speed',       icon: 'speed',     unit: 'km/h', color: '#45B7D1', field: 'speed',    fmt: (v, s) => s ? `${v.toFixed(1)}` : `${v.toFixed(1)} km/h`,  fmtAxis: v => v.toFixed(1),  transform: v => v * 3.6 },
-    gradient:    { label: 'Gradient',    icon: 'trending_up', unit: '%',    color: '#A8C8A0', field: 'gradient', fmt: (v, s) => s ? `${v.toFixed(1)}` : `${v.toFixed(1)} %`,     fmtAxis: v => `${v.toFixed(0)}%`, transform: null, compute: (pts, fill) => fill(smoothGradient(pts, 20)) },
-    power:       { label: 'Power',       icon: 'bolt',      unit: 'W',    color: '#F7DC6F', field: 'power',    fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} W`,     fmtAxis: v => v.toFixed(0),  transform: null },
-    hr:          { label: 'Heart Rate',  icon: 'favorite',  unit: 'bpm',  color: '#FF6B6B', field: 'hr',       fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} bpm`,   fmtAxis: v => v.toFixed(0),  transform: null },
-    cadence:     { label: 'Cadence',     icon: 'directions_run', unit: 'rpm',  color: '#BB8FCE', field: 'cad',      fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} rpm`,   fmtAxis: v => v.toFixed(0),  transform: null },
-    temperature: { label: 'Temperature', icon: 'thermostat', unit: '°C',   color: '#F8C471', field: 'temp',     fmt: (v, s) => s ? `${v.toFixed(1)}` : `${v.toFixed(1)} °C`,    fmtAxis: v => v.toFixed(1),  transform: null },
+    elevation:   { abbr: 'ele',  label: 'Elevation',   icon: 'height',    unit: 'm',    color: '#4ECDC4', field: 'ele',      fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} m`,     fmtAxis: v => v.toFixed(0),  transform: null },
+    speed:       { abbr: 'spd',  label: 'Speed',       icon: 'speed',     unit: 'km/h', color: '#45B7D1', field: 'speed',    fmt: (v, s) => s ? `${v.toFixed(1)}` : `${v.toFixed(1)} km/h`,  fmtAxis: v => v.toFixed(1),  transform: v => v * 3.6 },
+    gradient:    { abbr: 'grad', label: 'Gradient',    icon: 'trending_up', unit: '%',    color: '#A8C8A0', field: 'gradient', fmt: (v, s) => s ? `${v.toFixed(1)}` : `${v.toFixed(1)} %`,     fmtAxis: v => `${v.toFixed(0)}%`, transform: null, compute: (pts, fill) => fill(smoothGradient(pts, 20)) },
+    power:       { abbr: 'pwr',  label: 'Power',       icon: 'bolt',      unit: 'W',    color: '#F7DC6F', field: 'power',    fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} W`,     fmtAxis: v => v.toFixed(0),  transform: null },
+    hr:          { abbr: 'hr',   label: 'Heart Rate',  icon: 'favorite',  unit: 'bpm',  color: '#FF6B6B', field: 'hr',       fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} bpm`,   fmtAxis: v => v.toFixed(0),  transform: null },
+    cadence:     { abbr: 'cad',  label: 'Cadence',     icon: 'directions_run', unit: 'rpm',  color: '#BB8FCE', field: 'cad',      fmt: (v, s) => s ? `${v.toFixed(0)}` : `${v.toFixed(0)} rpm`,   fmtAxis: v => v.toFixed(0),  transform: null },
+    temperature: { abbr: 'temp', label: 'Temperature', icon: 'thermostat', unit: '°C',   color: '#F8C471', field: 'temp',     fmt: (v, s) => s ? `${v.toFixed(1)}` : `${v.toFixed(1)} °C`,    fmtAxis: v => v.toFixed(1),  transform: null },
   };
 
   // ── State ──────────────────────────────────────────────────────
@@ -21,7 +21,8 @@ const ChartView = (() => {
   let syncKey      = null;
   let scaleSyncing = false;
   let activeMetrics = new Set(['elevation','speed']);
-  let xAxis        = 'distance';
+  let availableMetrics = new Set();
+  let xAxis        = 'time';
   let currentTrack = null;
 
   // Selection / anchor
@@ -37,7 +38,8 @@ const ChartView = (() => {
   let onClickCb       = null;
 
   const HIST_W      = 130;
-  const HIST_MARGIN = 10 + 55; // margin-left + margin-right on .hist-col
+  const ROW_BODY_PADDING = 28; // 14px left + 14px right
+  const HIST_GAP     = 20; // margin-left on .hist-col
   let statsVisible = true;
   let histTooltipEl = null;
   let container, emptyEl, selStatsEl, resetSelBtn;
@@ -63,20 +65,32 @@ const ChartView = (() => {
   // ── Public API ────────────────────────────────────────────────
   function loadTrack(track) {
     pinnedPtIdx = null;
-    // Enable every metric that has at least one non-null data point in this file
-    activeMetrics = new Set(
+    
+    // Detect which metrics are available in this file
+    availableMetrics = new Set(
       Object.entries(METRICS)
-        .filter(([, def]) => def.compute
-          ? track.points.some(p => p[def.field] != null)
-          : track.points.some(p => p[def.field] != null))
+        .filter(([, def]) => track.points.some(p => p[def.field] != null))
         .map(([key]) => key)
     );
-    // Gradient is off by default (elevation already shows it)
-    activeMetrics.delete('gradient');
+
+    // If no metrics are active (e.g. first load), default to everything available
+    // but skip gradient by default.
+    if (activeMetrics.size === 0) {
+      activeMetrics = new Set(availableMetrics);
+      activeMetrics.delete('gradient');
+    } else {
+      // Filter existing active metrics by what's actually available in this track
+      // (We don't delete them from the Set so they can come back if you switch to a track that has them)
+    }
+
     // Sync the pill buttons in the toolbar
     document.querySelectorAll('.metric-pill').forEach(pill => {
-      pill.classList.toggle('active', activeMetrics.has(pill.dataset.metric));
+      const metric = pill.dataset.metric;
+      const isAvailable = availableMetrics.has(metric);
+      pill.classList.toggle('active', isAvailable && activeMetrics.has(metric));
+      pill.classList.toggle('disabled', !isAvailable);
     });
+
     currentTrack = track;
     render();
   }
@@ -85,7 +99,13 @@ const ChartView = (() => {
     pinnedPtIdx  = null;
     currentTrack = null;
     destroyPlots();
-    if (emptyEl) { emptyEl.style.display = 'flex'; emptyEl.textContent = 'Select a track to view analysis'; }
+    if (emptyEl) { 
+      emptyEl.style.display = 'flex'; 
+      emptyEl.innerHTML = `
+        <span class="material-symbols-rounded empty-icon">no_sim</span>
+        <div class="empty-text">Select a track to view analysis</div>
+      `;
+    }
     document.getElementById('chart-stats').classList.add('hidden');
     clearSelectionStats();
     mapColorMetric = null;
@@ -96,6 +116,15 @@ const ChartView = (() => {
     if (activeMetrics.has(key)) activeMetrics.delete(key);
     else                        activeMetrics.add(key);
     if (currentTrack) render();
+  }
+
+  function setActiveMetrics(keys) {
+    activeMetrics = new Set(keys);
+    if (currentTrack) render();
+    // Sync the pill buttons
+    document.querySelectorAll('.metric-pill').forEach(pill => {
+      pill.classList.toggle('active', activeMetrics.has(pill.dataset.metric));
+    });
   }
 
   function setXAxis(axis) { xAxis = axis; if (currentTrack) render(); }
@@ -150,15 +179,25 @@ const ChartView = (() => {
   }
 
   function resetZoom() {
-    plots.forEach(({ uplot: u, xData }) => u.setScale('x', { min: xData[0], max: xData[xData.length-1] }));
+    cancelSelection();
   }
 
   function cancelSelection() {
     selAnchorVal = null;
     selEndVal    = null;
+    pinnedPtIdx  = null;
+    
+    // Reset individual histogram pins
+    plots.forEach(p => { p.pinnedHistY = null; });
+
     updateSelOverlay();
     redrawHistograms();
-    resetZoom();
+    
+    // Perform the actual zoom reset
+    plots.forEach(({ uplot: u, xData }) => {
+      u.setScale('x', { min: xData[0], max: xData[xData.length-1] });
+    });
+
     if (onRangeChangeCb) onRangeChangeCb(null, null, xAxis);
   }
 
@@ -194,7 +233,7 @@ const ChartView = (() => {
 
   function resize() {
     if (!plots.length) return;
-    const w = Math.max(100, container.clientWidth - (statsVisible ? HIST_W + HIST_MARGIN : 0));
+    const w = Math.max(100, container.clientWidth - ROW_BODY_PADDING - (statsVisible ? HIST_W + HIST_GAP : 0));
     plots.forEach(({ uplot: u, histCanvas, histData }) => {
       u.setSize({ width: w, height: u.height });
       if (statsVisible && histCanvas && histData) drawHistogram(histCanvas, histData, u.height);
@@ -224,7 +263,7 @@ const ChartView = (() => {
     }
     if (emptyEl) emptyEl.style.display = 'none';
 
-    const w = Math.max(100, container.clientWidth - (statsVisible ? HIST_W + HIST_MARGIN : 0));
+    const w = Math.max(100, container.clientWidth - ROW_BODY_PADDING - (statsVisible ? HIST_W + HIST_GAP : 0));
     available.forEach(key => {
       const def   = METRICS[key];
       const yData = def.compute
@@ -294,10 +333,22 @@ const ChartView = (() => {
     function renderMinMax(xMin, xMax) {
       const s = rangeStats(xData, yData, xMin, xMax);
       if (!s) { minmaxEl.textContent = ''; return; }
-      minmaxEl.innerHTML =
-        `<span class="mm-item"><span class="mm-l">min</span>${def.fmt(s.min, true)} ${def.unit}</span>` +
-        `<span class="mm-item"><span class="mm-l">avg</span>${def.fmt(s.avg, true)} ${def.unit}</span>` +
-        `<span class="mm-item"><span class="mm-l">max</span>${def.fmt(s.max, true)} ${def.unit}</span>`;
+
+      let html = `
+        <span class="mm-item"><span class="material-symbols-rounded mm-icon">arrow_downward</span><span class="mm-l">min</span>${def.fmt(s.min, true)}&nbsp;${def.unit}</span>
+        <span class="mm-item"><span class="material-symbols-rounded mm-icon">horizontal_rule</span><span class="mm-l">avg</span>${def.fmt(s.avg, true)}&nbsp;${def.unit}</span>
+        <span class="mm-item"><span class="material-symbols-rounded mm-icon">arrow_upward</span><span class="mm-l">max</span>${def.fmt(s.max, true)}&nbsp;${def.unit}</span>
+      `;
+
+      if (metricKey === 'elevation') {
+        const es = elevationRangeStats(pts, xMin, xMax);
+        html += `
+          <span class="mm-item"><span class="material-symbols-rounded mm-icon">trending_up</span><span class="mm-l">gain</span>+${Math.round(es.gain)}&nbsp;m</span>
+          <span class="mm-item"><span class="material-symbols-rounded mm-icon">trending_down</span><span class="mm-l">loss</span>-${Math.round(es.loss)}&nbsp;m</span>
+        `;
+      }
+
+      minmaxEl.innerHTML = html;
     }
     renderMinMax(xData[0], xData[xData.length - 1]);
 
@@ -316,7 +367,7 @@ const ChartView = (() => {
             ? (u, _si) => gradientColor(gradData ? gradData[u.cursor.idx] : null)
             : def.color,
         },
-        x: true, y: false,
+        x: false, y: false,
       },
       select: { show: true },
       legend: { show: false },
@@ -329,7 +380,11 @@ const ChartView = (() => {
           stroke: '#555564', grid: { stroke: '#2e2e34', width: 1 }, ticks: { stroke: '#2e2e34' },
           size: 30, font: '10px system-ui', color: '#555564',
           values: isDistAxis
-            ? (_u, vals) => vals.map(v => v != null ? `${v.toFixed(0)} km` : '')
+            ? (_u, vals) => {
+                const range = _u.scales.x.max - _u.scales.x.min;
+                const dec = range < 1 ? 3 : (range < 5 ? 2 : (range < 20 ? 1 : 0));
+                return vals.map(v => v != null ? `${v.toFixed(dec)} km` : '');
+              }
             : (_u, vals) => vals.map(v => { if (v==null) return ''; const h=Math.floor(v/3600), m=Math.floor((v%3600)/60); return h>0?`${h}:${String(m).padStart(2,'0')}`:`${m}:${String(v%60|0).padStart(2,'0')}`; }),
         },
         {
@@ -340,7 +395,7 @@ const ChartView = (() => {
       ],
       series: [
         {},
-        (metricKey === 'elevation' || metricKey === 'gradient')
+        (metricKey === 'elevation' || metricKey === 'gradient' || mapColorMetric === metricKey)
           // Invisible — we draw manually in the draw hook
           ? { label: def.label, stroke: 'rgba(0,0,0,0)', fill: 'rgba(0,0,0,0)', width: 0, points: { show: false } }
           : { label: def.label, stroke: def.color, fill: hexToRgba(def.color, 0.08), width: 1.5, points: { show: false } },
@@ -349,8 +404,51 @@ const ChartView = (() => {
         draw: [
           ...(metricKey === 'elevation' ? [u => drawElevationGradient(u, xData, yData, gradData)] : []),
           ...(metricKey === 'gradient'  ? [u => drawGradientChart(u, xData, yData)] : []),
-          u => drawHoverLine(u, yData, def.color),
-          u => drawPinnedDot(u, xData, yData, def.color, def),
+          // Metric coloring sync: if this metric is coloring the map, fill the graph with it too
+          u => {
+            if (mapColorMetric === metricKey && metricKey !== 'elevation' && metricKey !== 'gradient') {
+              drawMetricColorFill(u, xData, yData, pts, metricKey);
+            }
+          },
+          u => drawHoverLine(u, yData, def.color, pts),
+          u => {
+            const plot = plots.find(p => p.uplot === u);
+            if (!plot) return;
+
+            // Priority 1: Global pinned point (all charts)
+            if (pinnedPtIdx != null) {
+              drawPinnedDot(u, xData, yData, def.color, def, pts);
+            } 
+            // Priority 2: Individual histogram pinned Y-pos (this chart only)
+            else if (plot.pinnedHistY != null) {
+              drawYAxisHighlight(u, xData, yData, plot.pinnedHistY, def.color, def);
+            }
+            // Priority 3: Individual histogram hovered Y-pos (this chart only)
+            else if (plot.hoveredHistY != null) {
+              drawYAxisHighlight(u, xData, yData, plot.hoveredHistY, def.color, def);
+            }
+          },
+          u => {
+            const hIdx = u.cursor.idx;
+            const hasPinned = pinnedPtIdx != null;
+            const hasHover  = hIdx != null && u.cursor.left >= 0;
+
+            // 1. Draw vertical lines (drawn first, underneath labels)
+            if (hasPinned) {
+              drawVerticalLineOnly(u, pts, pinnedPtIdx, def.color);
+            }
+            if (hasHover && hIdx !== pinnedPtIdx) {
+              drawVerticalLineOnly(u, pts, hIdx, 'rgba(255,255,255,0.4)');
+            }
+
+            // 2. Draw label pills (on top)
+            if (hasPinned) {
+              drawXAxisLabels(u, pts, pinnedPtIdx, def.color, true); // true = skipLine
+            }
+            if (hasHover && hIdx !== pinnedPtIdx) {
+              drawXAxisLabels(u, pts, hIdx, '#888896', true); // true = skipLine
+            }
+          }
         ],
         setCursor: [u => {
           const idx = u.cursor.idx;
@@ -396,6 +494,27 @@ const ChartView = (() => {
           if (idx != null && pts[idx] && onCursorMoveCb) {
             onCursorMoveCb(pts[idx]);
           }
+
+          // ── Histogram bucket highlight on chart hover ──
+          if (statsVisible) {
+            plots.forEach(p => {
+              if (!p.histCanvas || !p.histData) return;
+              const { yData, histData } = p;
+              const val = idx != null ? yData[idx] : null;
+              let binI = null;
+              if (val != null && isFinite(val) && histData.bins) {
+                const { min, max, BINS } = histData;
+                const span = max - min || 1;
+                binI = Math.min(BINS - 1, Math.floor(((val - min) / span) * BINS));
+              }
+              // Only redraw if bin changed or cursor left/entered
+              if (p._lastHoverBin !== binI) {
+                p._lastHoverBin = binI;
+                drawHistogram(p.histCanvas, histData, p.uplot.height, binI);
+              }
+            });
+          }
+
           u.redraw(false);
         }],
 
@@ -539,10 +658,13 @@ const ChartView = (() => {
     plotEl.addEventListener('dblclick', cancelSelection);
 
     const histData = { yData, xData, def, BINS: 24 };
+    const plot = { uplot, row, xData, yData, def, metricKey, minmaxEl, histCol, histCanvas, histData, hoveredHistY: null, pinnedHistY: null };
+    histData.plot = plot; // Back-reference for tooltip to trigger redraws
+
     drawHistogram(histCanvas, histData, 130);
     attachHistTooltip(histCanvas, histData);
 
-    plots.push({ uplot, row, xData, yData, def, metricKey, minmaxEl, histCol, histCanvas, histData });
+    plots.push(plot);
   }
 
   // ── Selection overlay (fill + lines + handles) ───────────────
@@ -709,6 +831,29 @@ const ChartView = (() => {
       sum += v; n++;
     }
     return n ? { min, max, avg: sum / n } : null;
+  }
+
+  function elevationRangeStats(pts, xMin, xMax) {
+    let gain = 0, loss = 0;
+    let prevEle = null;
+    const isDist = xAxis === 'distance';
+    const t0 = pts[0].time || 0;
+
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      const x = isDist ? (p.dist || 0) / 1000 : (p.time - t0) / 1000;
+      if (x < xMin || x > xMax) continue;
+
+      if (p.ele != null) {
+        if (prevEle != null) {
+          const diff = p.ele - prevEle;
+          if (diff > 0) gain += diff;
+          else if (diff < 0) loss += Math.abs(diff);
+        }
+        prevEle = p.ele;
+      }
+    }
+    return { gain, loss };
   }
 
   // Distance-weighted gradient smoothing over a window of `windowM` metres.
@@ -884,7 +1029,107 @@ const ChartView = (() => {
     plots.forEach(({ uplot: u }) => u.redraw(false));
   }
 
-  function drawHoverLine(u, yData, color) {
+  function drawVerticalLineOnly(u, pts, idx, color) {
+    if (idx == null || !pts[idx]) return;
+    const pt  = pts[idx];
+    const bb  = u.bbox;
+    const ctx = u.ctx;
+    const dpr = window.devicePixelRatio || 1;
+    const cx  = u.valToPos(xAxis === 'distance' ? (pt.dist || 0) / 1000 : (pt.time - pts[0].time) / 1000, 'x', true);
+
+    // Skip if point is outside visible x-range
+    if (cx < bb.left || cx > bb.left + bb.width) return;
+
+    ctx.save();
+    
+    // Clip to chart area (horizontally) to avoid drawing over Y-axis
+    ctx.beginPath();
+    ctx.rect(bb.left, 0, bb.width, u.over.offsetHeight * dpr);
+    ctx.clip();
+
+    ctx.beginPath();
+    ctx.setLineDash([4 * dpr, 4 * dpr]);
+    ctx.strokeStyle = hexToRgba(color, 0.5);
+    ctx.lineWidth = 1 * dpr;
+    // Start below the top label area (approx 14px) and extend through bottom axis
+    ctx.moveTo(cx, bb.top + 14 * dpr); 
+    ctx.lineTo(cx, bb.top + bb.height + 25 * dpr); 
+    ctx.stroke();
+    
+    ctx.restore();
+  }
+
+  function drawXAxisLabels(u, pts, idx, color, skipLine = false) {
+    if (idx == null || !pts[idx]) return;
+    const pt  = pts[idx];
+    const bb  = u.bbox;
+    const ctx = u.ctx;
+    const dpr = window.devicePixelRatio || 1;
+    const cx  = u.valToPos(xAxis === 'distance' ? (pt.dist || 0) / 1000 : (pt.time - pts[0].time) / 1000, 'x', true);
+
+    // Skip if labels would be outside the chart area (left/right)
+    if (cx < bb.left || cx > bb.left + bb.width) return;
+
+    ctx.save();
+    
+    // ── Vertical line ──
+    if (!skipLine) {
+      drawVerticalLineOnly(u, pts, idx, color);
+    }
+
+    // ── Labels ──
+    const fontSize = 9 * dpr;
+    const axisColor = '#555564'; // Match uPlot axis label color
+    ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center';
+
+    const t0 = pts[0].time || 0;
+    const distStr = `${((pt.dist || 0) / 1000).toFixed(2)} km`;
+    const timeStr = fmtSecs((pt.time - t0) / 1000);
+
+    const bottomLabel = xAxis === 'distance' ? distStr : timeStr;
+    const topLabel    = xAxis === 'distance' ? timeStr : distStr;
+
+    const drawPill = (text, x, y, isTop) => {
+      const tw = ctx.measureText(text).width;
+      const padH = 4 * dpr;
+      const padV = 2 * dpr;
+      const bw = tw + padH * 2;
+      const bh = fontSize + padV * 2;
+      const rx = x - bw / 2;
+      
+      // Horizontal clamping for the pill itself so it doesn't bleed out of the chart horizontally
+      const clampedRx = Math.max(bb.left, Math.min(bb.left + bb.width - bw, rx));
+      const ry = y - bh / 2;
+
+      ctx.save();
+      ctx.setLineDash([]); // Ensure pills are not dashed
+      ctx.beginPath();
+      if (ctx.roundRect) {
+        ctx.roundRect(clampedRx, ry, bw, bh, 3 * dpr);
+      } else {
+        ctx.rect(clampedRx, ry, bw, bh);
+      }
+      ctx.fillStyle = 'rgba(14,14,16,1.0)'; // Fully opaque to cover axis labels
+      ctx.fill();
+      ctx.strokeStyle = hexToRgba(axisColor, 0.6);
+      ctx.stroke();
+      ctx.fillStyle = axisColor;
+      // Center text relative to the clamped pill
+      ctx.fillText(text, clampedRx + bw / 2, ry + bh / 2);
+      ctx.restore();
+    };
+
+    // Top label flush with chart top
+    drawPill(topLabel, cx, bb.top + 7 * dpr, true);
+    // Bottom label aligns with axis labels
+    drawPill(bottomLabel, cx, bb.top + bb.height + 18 * dpr, false);
+
+    ctx.restore();
+  }
+
+  function drawHoverLine(u, yData, color, pts) {
     const idx = u.cursor.idx;
     if (idx == null || yData[idx] == null || u.cursor.left < 0) return;
 
@@ -894,6 +1139,7 @@ const ChartView = (() => {
     const dpr = window.devicePixelRatio || 1;
 
     ctx.save();
+    // ── Horizontal line ──
     ctx.setLineDash([5 * dpr, 5 * dpr]);
     ctx.strokeStyle = hexToRgba(color, 0.4);
     ctx.lineWidth = 1 * dpr;
@@ -904,7 +1150,7 @@ const ChartView = (() => {
     ctx.restore();
   }
 
-  function drawPinnedDot(u, xData, yData, color, def) {
+  function drawPinnedDot(u, xData, yData, color, def, pts) {
     if (pinnedPtIdx == null) return;
     const xVal = xData[pinnedPtIdx];
     const yVal = yData[pinnedPtIdx];
@@ -923,39 +1169,7 @@ const ChartView = (() => {
     ctx.save();
 
     // ── 1. Solid fill above the pinned line ────────────────────────
-    // Walk across all data points; where yData > yVal, fill from curve down to cy.
-    const rgba = hexToRgba(color, 0.35);
-    ctx.beginPath();
-    let inAbove = false;
-    for (let i = 0; i < xData.length; i++) {
-      if (xData[i] == null || yData[i] == null) { inAbove = false; continue; }
-      const px = u.valToPos(xData[i], 'x', true);
-      const py = u.valToPos(yData[i], 'y', true);
-      if (py <= cyClamp) {           // curve is above the line (canvas y is inverted)
-        if (!inAbove) {
-          // Start new sub-path: move to line level, then up to curve
-          const pxPrev = i > 0 ? u.valToPos(xData[i-1], 'x', true) : px;
-          ctx.moveTo(pxPrev, cyClamp);
-          inAbove = true;
-        }
-        ctx.lineTo(px, py);
-      } else {
-        if (inAbove) {
-          // Close back down to line level
-          const pxPrev = u.valToPos(xData[i-1], 'x', true);
-          ctx.lineTo(pxPrev, cyClamp);
-          ctx.closePath();
-        }
-        inAbove = false;
-      }
-    }
-    if (inAbove) {
-      const lastX = u.valToPos(xData[xData.length - 1], 'x', true);
-      ctx.lineTo(lastX, cyClamp);
-      ctx.closePath();
-    }
-    ctx.fillStyle = rgba;
-    ctx.fill();
+    drawAreaFillAbove(u, xData, yData, cyClamp, color);
 
     // ── 2. Dotted horizontal line across full plot width ──────────
     ctx.beginPath();
@@ -982,18 +1196,18 @@ const ChartView = (() => {
     ctx.fill();
 
     // ── 4. Tooltip label ───────────────────────────────────────────
-    const label    = `${def.fmt(yVal, false)} ${def.unit}`;
+    const label    = def.fmt(yVal, false);
     const fontSize = 11 * dpr;
     ctx.font      = `600 ${fontSize}px system-ui, sans-serif`;
     const tw      = ctx.measureText(label).width;
     const pad     = 5 * dpr;
-    const th      = fontSize + pad * 1.6;
-    const bw      = tw + pad * 2.4;
+    const th      = fontSize + pad * 1.2;
+    const bw      = tw + pad * 2.0;
     // Prefer right of dot; flip left if too close to edge
-    const bx = cx + r + 4 * dpr + bw < bb.left + bb.width
-      ? cx + r + 4 * dpr
-      : cx - r - 4 * dpr - bw;
-    const by = cyClamp - th / 2;
+    const bx = cx + r + 6 * dpr + bw < bb.left + bb.width
+      ? cx + r + 6 * dpr
+      : cx - r - 6 * dpr - bw;
+    const by = cyClamp - th - 4 * dpr; // Position above the dot
 
     // Background pill
     ctx.beginPath();
@@ -1008,18 +1222,105 @@ const ChartView = (() => {
       ctx.arcTo(bx, by, bx + bw, by, rad);
       ctx.closePath();
     }
-    ctx.fillStyle = 'rgba(14,14,16,0.88)';
+    ctx.fillStyle = 'rgba(14,14,16,0.92)';
     ctx.fill();
-    ctx.strokeStyle = hexToRgba(color, 0.55);
+    ctx.strokeStyle = hexToRgba(color, 0.6);
     ctx.lineWidth   = 1 * dpr;
     ctx.stroke();
 
     // Text
     ctx.fillStyle    = color;
+    ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(label, bx + pad * 1.2, by + th / 2);
+    ctx.fillText(label, bx + bw / 2, by + th / 2);
 
     ctx.restore();
+  }
+
+  function drawYAxisHighlight(u, xData, yData, yVal, color, def) {
+    const bb  = u.bbox;
+    const ctx = u.ctx;
+    const dpr = window.devicePixelRatio || 1;
+    const cy  = u.valToPos(yVal, 'y', true);
+
+    // Clamp cy to bbox
+    const cyClamp = Math.max(bb.top, Math.min(bb.top + bb.height, cy));
+
+    ctx.save();
+
+    // ── 1. Area fill ──
+    drawAreaFillAbove(u, xData, yData, cyClamp, color);
+
+    // ── 2. Dotted horizontal line ──
+    ctx.beginPath();
+    ctx.setLineDash([4 * dpr, 4 * dpr]);
+    ctx.moveTo(bb.left, cyClamp);
+    ctx.lineTo(bb.left + bb.width, cyClamp);
+    ctx.strokeStyle = hexToRgba(color, 0.6);
+    ctx.lineWidth   = 1.5 * dpr;
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // ── 3. Tooltip label (next to axis) ──
+    const label    = def.fmt(yVal, false);
+    const fontSize = 10 * dpr;
+    ctx.font      = `600 ${fontSize}px system-ui, sans-serif`;
+    const tw      = ctx.measureText(label).width;
+    const pad     = 4 * dpr;
+    const th      = fontSize + pad * 1.5;
+    const bw      = tw + pad * 2.5;
+    
+    // Position on the left edge of the chart area
+    const bx = bb.left + 4 * dpr;
+    const by = cyClamp - th / 2;
+
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(bx, by, bw, th, 3 * dpr);
+    else ctx.rect(bx, by, bw, th);
+    
+    ctx.fillStyle = 'rgba(14,14,16,0.92)';
+    ctx.fill();
+    ctx.strokeStyle = hexToRgba(color, 0.6);
+    ctx.stroke();
+
+    ctx.fillStyle    = color;
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, bx + bw / 2, by + th / 2);
+
+    ctx.restore();
+  }
+
+  function drawAreaFillAbove(u, xData, yData, cyClamp, color) {
+    const ctx = u.ctx;
+    const rgba = hexToRgba(color, 0.3);
+    ctx.beginPath();
+    let inAbove = false;
+    for (let i = 0; i < xData.length; i++) {
+      if (xData[i] == null || yData[i] == null) { inAbove = false; continue; }
+      const px = u.valToPos(xData[i], 'x', true);
+      const py = u.valToPos(yData[i], 'y', true);
+      if (py <= cyClamp) { // canvas y is inverted
+        if (!inAbove) {
+          const pxPrev = i > 0 ? u.valToPos(xData[i-1], 'x', true) : px;
+          ctx.moveTo(pxPrev, cyClamp);
+          inAbove = true;
+        }
+        ctx.lineTo(px, py);
+      } else if (inAbove) {
+        const pxPrev = u.valToPos(xData[i-1], 'x', true);
+        ctx.lineTo(pxPrev, cyClamp);
+        ctx.closePath();
+        inAbove = false;
+      }
+    }
+    if (inAbove) {
+      const lastX = u.valToPos(xData[xData.length - 1], 'x', true);
+      ctx.lineTo(lastX, cyClamp);
+      ctx.closePath();
+    }
+    ctx.fillStyle = rgba;
+    ctx.fill();
   }
 
   // ── Histogram drawing ─────────────────────────────────────────
@@ -1084,7 +1385,11 @@ const ChartView = (() => {
       ctx.measureText(`${fmt(max)} ${def.unit}`).width,
       ctx.measureText(`${fmt(min)} ${def.unit}`).width
     ));
-    const pad    = { t: 6, r: 4, b: 6, l: labelW + 6 };
+    
+    // Vertical alignment with main graph:
+    // uPlot padding: [4, 0, 0, 0]
+    // Axis size: 30
+    const pad    = { t: 4, r: 0, b: 30, l: labelW + 6 };
     histData.padL = pad.l;
     const plotW  = W - pad.l - pad.r;
     const plotH  = H - pad.t - pad.b;
@@ -1151,7 +1456,8 @@ const ChartView = (() => {
       }
 
       ctx.beginPath();
-      ctx.setLineDash([2 * dpr, 3 * dpr]);
+      // CDF line is now solid
+      ctx.setLineDash([]);
       ctx.strokeStyle = def.color;
       ctx.lineWidth   = 0.75 * dpr;
       ctx.lineJoin    = 'round';
@@ -1163,17 +1469,100 @@ const ChartView = (() => {
       }
       ctx.lineTo(pts2[pts2.length - 1].x, pts2[pts2.length - 1].y);
       ctx.stroke();
-      ctx.setLineDash([]);
+
+      // ── Hover highlight on CDF ──
+      if (hoverBinI != null && pts2[hoverBinI + 1]) {
+        const cp = pts2[hoverBinI + 1];
+        // Vertical line down
+        ctx.beginPath();
+        ctx.setLineDash([2 * dpr, 2 * dpr]);
+        ctx.strokeStyle = hexToRgba(def.color, 0.6);
+        ctx.moveTo(cp.x, cp.y);
+        ctx.lineTo(cp.x, pad.t + plotH);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Dot: tiny precision point
+        ctx.beginPath();
+        ctx.arc(cp.x, cp.y, 1.2 * dpr, 0, Math.PI * 2);
+        ctx.fillStyle = '#0e0e10';
+        ctx.fill();
+        ctx.strokeStyle = def.color;
+        ctx.lineWidth = 1 * dpr;
+        ctx.stroke();
+      }
     }
 
     // Axis labels: max at top, min at bottom
     ctx.fillStyle    = '#888896';
     ctx.font         = '9px system-ui, sans-serif';
     ctx.textAlign    = 'right';
+    
+    // Draw Max
     ctx.textBaseline = 'top';
     ctx.fillText(`${fmt(max)} ${def.unit}`, pad.l - 4, pad.t);
+    
+    // Draw Min
     ctx.textBaseline = 'bottom';
     ctx.fillText(`${fmt(min)} ${def.unit}`, pad.l - 4, H - pad.b);
+
+    // Draw Avg (only if it doesn't overlap min/max)
+    const stats = rangeStats(histData.xData, histData.yData, selAnchorVal || -Infinity, selEndVal || Infinity);
+    if (stats) {
+      const avgY = pad.t + (BINS - 1 - Math.min(BINS - 1, Math.floor(((stats.avg - min) / (max - min || 1)) * BINS))) * (plotH / BINS);
+      const minLabelY = H - pad.b;
+      const maxLabelY = pad.t;
+      const labelHeight = 10; // Approx 10px height for 9px font
+
+      if (avgY > maxLabelY + labelHeight + 2 && avgY < minLabelY - labelHeight - 2) {
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#aaa';
+        ctx.fillText(`${fmt(stats.avg)} ${def.unit}`, pad.l - 4, avgY);
+        // Draw small indicator tick
+        ctx.beginPath();
+        ctx.moveTo(pad.l - 3, avgY);
+        ctx.lineTo(pad.l, avgY);
+        ctx.strokeStyle = '#aaa';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    }
+
+    // ── Higher/Lower percentages below histogram ──
+    if (hoverBinI != null && total > 0) {
+      let countLower = 0;
+      for (let i = 0; i < hoverBinI; i++) countLower += bins[i];
+      let countHigher = 0;
+      for (let i = hoverBinI + 1; i < BINS; i++) countHigher += bins[i];
+
+      const pLower  = Math.round((countLower / total) * 100);
+      const pHigher = Math.round((countHigher / total) * 100);
+
+      ctx.save();
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.font = '8px system-ui, sans-serif';
+      
+      const textY = H - pad.b + 6;
+      
+      // Draw "Lower" stat
+      ctx.fillStyle = '#888896';
+      ctx.fillText('LOWER', pad.l, textY);
+      ctx.fillStyle = '#ccc';
+      ctx.font = 'bold 10px system-ui, sans-serif';
+      ctx.fillText(`${pLower}%`, pad.l, textY + 10);
+
+      // Draw "Higher" stat
+      const midX = pad.l + plotW / 2;
+      ctx.font = '8px system-ui, sans-serif';
+      ctx.fillStyle = '#888896';
+      ctx.fillText('HIGHER', midX, textY);
+      ctx.fillStyle = '#ccc';
+      ctx.font = 'bold 10px system-ui, sans-serif';
+      ctx.fillText(`${pHigher}%`, midX, textY + 10);
+      
+      ctx.restore();
+    }
   }
 
   function redrawHistograms() {
@@ -1187,38 +1576,52 @@ const ChartView = (() => {
     let lastBinI  = null;
     const lineEl  = document.getElementById('hist-line');
 
+    const getBinAt = (e) => {
+      const { bins, BINS } = histData;
+      if (!bins) return null;
+      const rect  = canvas.getBoundingClientRect();
+      const relY  = e.clientY - rect.top;
+      // Use exact padding from drawHistogram: t: 4, b: 30
+      const pad   = { t: 4, b: 30 };
+      const plotH = rect.height - pad.t - pad.b;
+      const rawI  = Math.floor(((relY - pad.t) / plotH) * BINS);
+      const binI  = BINS - 1 - rawI;
+      if (rawI < 0 || rawI >= BINS) return null;
+      return binI;
+    };
+
     const hide = () => {
       if (histTooltipEl) histTooltipEl.style.display = 'none';
       if (lineEl) lineEl.style.display = 'none';
       if (lastBinI !== null) {
         lastBinI = null;
+        if (histData.plot) {
+          histData.plot.hoveredHistY = null;
+          histData.plot.uplot.redraw(false);
+        }
         drawHistogram(canvas, histData, canvas.height / (window.devicePixelRatio || 1));
       }
     };
 
     canvas.addEventListener('mousemove', e => {
       if (!histTooltipEl) return;
-      const { bins, binAccum, min, max, BINS, def } = histData;
-      if (!bins) return;
-
-      const rect  = canvas.getBoundingClientRect();
-      const relY  = e.clientY - rect.top;
-      const pad   = { t: 6, b: 6 };
-      const plotH = rect.height - pad.t - pad.b;
-      // bins are drawn bottom-to-top: row 0 of canvas = highest bin
-      const rawI  = Math.floor(((relY - pad.t) / plotH) * BINS);
-      const binI  = BINS - 1 - rawI;
-
-      if (rawI < 0 || rawI >= BINS) { hide(); return; }
-
-      if (binI !== lastBinI) {
-        lastBinI = binI;
-        drawHistogram(canvas, histData, canvas.height / (window.devicePixelRatio || 1), binI);
-      }
+      const { binAccum, min, max, BINS, def, plot } = histData;
+      const binI = getBinAt(e);
+      if (binI === null) { hide(); return; }
 
       const span   = max - min || 1;
       const binMin = min + (binI / BINS) * span;
       const binMax = min + ((binI + 1) / BINS) * span;
+
+      if (binI !== lastBinI) {
+        lastBinI = binI;
+        if (plot) {
+          plot.hoveredHistY = binMin;
+          plot.uplot.redraw(false);
+        }
+        drawHistogram(canvas, histData, canvas.height / (window.devicePixelRatio || 1), binI);
+      }
+
       const fmt    = v => (max - min < 10 ? v.toFixed(1) : v.toFixed(0));
       const fmtAccum = v => xAxis === 'time' ? fmtSecs(Math.round(v)) : `${v.toFixed(2)} km`;
       const label  = xAxis === 'time' ? 'Duration' : 'Dist';
@@ -1229,12 +1632,30 @@ const ChartView = (() => {
       const totalAccum = binAccum ? fmtAccum(binAccum[binI]) : null;
       const selAccum   = hasSel && selBinAccum ? fmtAccum(selBinAccum[binI]) : null;
 
-      let html = `<span style="color:${def.color};font-weight:600">${fmt(binMin)}–${fmt(binMax)} ${def.unit}</span>`;
+      // Percentage calculation: weight of this bin / total weight of all bins
+      const totalWeight = binAccum.reduce((a, b) => a + b, 0);
+      const totalPct = totalWeight > 0 ? (binAccum[binI] / totalWeight) * 100 : 0;
+
+      let html = `<div style="color:${def.color};font-weight:600;margin-bottom:4px;text-align:center">${fmt(binMin)}–${fmt(binMax)} ${def.unit}</div>`;
       if (hasSel) {
-        html += `<br><span style="color:var(--text-muted);font-size:10px">Total &nbsp;</span><span style="color:var(--text)">${totalAccum ?? '—'}</span>`;
-        html += `<br><span style="color:var(--accent);font-size:10px">Sel &nbsp;&nbsp;&nbsp;</span><span style="color:var(--accent)">${selAccum ?? '—'}</span>`;
+        const selWeight = histData.selBinAccum.reduce((a, b) => a + b, 0);
+        const selPct = selWeight > 0 ? (histData.selBinAccum[binI] / selWeight) * 100 : 0;
+
+        html += `<div class="hist-tt-grid">
+          <span class="hist-tt-label">Total</span>
+          <span class="hist-tt-value">${totalAccum ?? '—'}</span>
+          <span class="hist-tt-pct">${totalPct.toFixed(1)}%</span>
+          
+          <span class="hist-tt-label sel">Sel</span>
+          <span class="hist-tt-value sel">${selAccum ?? '—'}</span>
+          <span class="hist-tt-pct sel">${selPct.toFixed(1)}%</span>
+        </div>`;
       } else if (totalAccum) {
-        html += `<br><span style="color:var(--text-muted)">${label}: ${totalAccum}</span>`;
+        html += `<div class="hist-tt-grid">
+          <span class="hist-tt-label">${label}</span>
+          <span class="hist-tt-value">${totalAccum}</span>
+          <span class="hist-tt-pct">${totalPct.toFixed(1)}%</span>
+        </div>`;
       }
       histTooltipEl.innerHTML = html;
 
@@ -1243,6 +1664,9 @@ const ChartView = (() => {
       const ttH   = histTooltipEl.offsetHeight;
       const ttW   = histTooltipEl.offsetWidth;
       // binY(i) = pad.t + (BINS-1-i) * (plotH/BINS), centre = + 0.5*(plotH/BINS)
+      const rect  = canvas.getBoundingClientRect();
+      const pad   = { t: 4, b: 30 };
+      const plotH = rect.height - pad.t - pad.b;
       const binCY = rect.top + pad.t + (BINS - 1 - binI + 0.5) * (plotH / BINS);
       const ttLeft = rect.left - ttW - 10;
       const ttTop  = Math.round(binCY - ttH / 2);
@@ -1263,6 +1687,22 @@ const ChartView = (() => {
       }
     });
 
+    canvas.addEventListener('click', e => {
+      const binI = getBinAt(e);
+      if (binI === null || !histData.plot) return;
+      const { min, max, BINS } = histData;
+      const span   = max - min || 1;
+      const binMin = min + (binI / BINS) * span;
+
+      // Toggle pinned Y if same bucket, otherwise set new pinned Y
+      if (histData.plot.pinnedHistY === binMin) {
+        histData.plot.pinnedHistY = null;
+      } else {
+        histData.plot.pinnedHistY = binMin;
+      }
+      histData.plot.uplot.redraw(false);
+    });
+
     canvas.addEventListener('mouseleave', hide);
   }
 
@@ -1280,6 +1720,53 @@ const ChartView = (() => {
     resize, METRICS,
     isDragging: getIsDragging,
     setMapColorChangeCb, toggleMapColor,
+    getActiveMetrics: () => activeMetrics,
+    getAvailableMetrics: () => availableMetrics,
+    setActiveMetrics,
+    toggleMapColor,
   };
+
+  function drawMetricColorFill(u, xData, yData, pts, metricKey) {
+    const ctx = u.ctx;
+    const bb  = u.bbox;
+    const dpr = window.devicePixelRatio || 1;
+    const colors = _computePointColors(metricKey, yData);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(bb.left, bb.top, bb.width, bb.height);
+    ctx.clip();
+
+    const baseY = bb.top + bb.height;
+
+    for (let i = 1; i < xData.length; i++) {
+      if (xData[i] == null || yData[i] == null || xData[i-1] == null || yData[i-1] == null) continue;
+      const x0 = u.valToPos(xData[i-1], 'x', true);
+      const y0 = u.valToPos(yData[i-1], 'y', true);
+      const x1 = u.valToPos(xData[i],   'x', true);
+      const y1 = u.valToPos(yData[i],   'y', true);
+
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.lineTo(x1, baseY);
+      ctx.lineTo(x0, baseY);
+      ctx.closePath();
+      
+      const c = colors[i];
+      ctx.fillStyle = hexToRgba(c, 0.25);
+      ctx.fill();
+
+      // Top line segment
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.strokeStyle = c;
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
 
 })();

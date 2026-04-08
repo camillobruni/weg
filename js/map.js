@@ -12,15 +12,13 @@ const MapView = (() => {
   let metricColorId    = null;   // track id currently colored by metric
   let onSelectCb     = null;
   let onPointClickCb = null;
+  let onMoveCb       = null;
+  let onDblClickCb   = null;
 
   // Tile layers
   const LAYERS = {
     swisstopo: L.tileLayer(
       'https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-farbe/default/current/3857/{z}/{x}/{y}.jpeg',
-      { attribution: '© <a href="https://www.swisstopo.admin.ch" target="_blank">swisstopo</a>', maxZoom: 19 }
-    ),
-    'swisstopo-gray': L.tileLayer(
-      'https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-grau/default/current/3857/{z}/{x}/{y}.jpeg',
       { attribution: '© <a href="https://www.swisstopo.admin.ch" target="_blank">swisstopo</a>', maxZoom: 19 }
     ),
     osm: L.tileLayer(
@@ -36,8 +34,6 @@ const MapView = (() => {
       { attribution: '© Esri', maxZoom: 19 }
     ),
   };
-
-  let onSelectCb, onMoveCb, onPointClickCb, onDblClickCb;
 
   function init(onSelect, onMove, onPointClick, onDblClick) {
     onSelectCb     = onSelect;
@@ -242,7 +238,7 @@ const MapView = (() => {
 
   // ── Chart-selection highlight segment ────────────────────────
   // pts: full points array, iMin/iMax: indices of visible range
-  function highlightSegment(id, pts, iMin, iMax, fit = false) {
+  function highlightSegment(id, pts, iMin, iMax, fit = false, colors = null) {
     clearHighlight();
     if (!pts || iMin >= iMax) return;
     const latlngs = pts.slice(iMin, iMax + 1).map(p => [p.lat, p.lon]);
@@ -267,12 +263,26 @@ const MapView = (() => {
       interactive: false,
     });
     
-    const inner = L.polyline(latlngs, {
-      color: trackColor,
-      weight: 5,
-      opacity: 1,
-      interactive: false,
-    });
+    let inner;
+    if (colors && colors.length) {
+      // Create multi-colored polyline for the highlight
+      const segs = [];
+      for (let i = iMin + 1; i <= iMax; i++) {
+        const c = colors[i] || colors[i-1] || '#888896';
+        segs.push(L.polyline(
+          [[pts[i-1].lat, pts[i-1].lon], [pts[i].lat, pts[i].lon]],
+          { color: c, weight: 6, opacity: 1, interactive: false }
+        ));
+      }
+      inner = L.featureGroup(segs);
+    } else {
+      inner = L.polyline(latlngs, {
+        color: trackColor,
+        weight: 6,
+        opacity: 1,
+        interactive: false,
+      });
+    }
 
     // Start/End markers (Monochrome)
     const startIcon = L.divIcon({
@@ -293,6 +303,7 @@ const MapView = (() => {
 
     // Group them on the highlightLine variable for easy removal
     highlightLine = L.featureGroup([bgBlack, bgWhite, inner, mStart, mEnd]).addTo(map);
+    highlightLine.bringToFront();
   }
 
   function clearHighlight() {
@@ -313,13 +324,13 @@ const MapView = (() => {
     if (cursorMarker && map.hasLayer(cursorMarker)) map.removeLayer(cursorMarker);
   }
 
-  function centerOn(lat, lon, zoom) {
+  function centerOn(lat, lon, zoom, animate = true) {
     // Ensure Leaflet has the latest container dimensions before centering
     map.invalidateSize();
     if (zoom) {
-      map.setView([lat, lon], zoom, { animate: true });
+      map.setView([lat, lon], zoom, { animate });
     } else {
-      map.panTo([lat, lon], { animate: true });
+      map.panTo([lat, lon], { animate });
     }
   }
 
@@ -369,13 +380,6 @@ const MapView = (() => {
       .openOn(map);
 
     // Wire up click handlers after popup is in DOM
-    // If there's only one nearby track (or one is already selected), fire
-    // the point-click callback immediately without waiting for popup selection.
-    const alreadySelected = shown.find(r => r.id === shown[0].id);
-    if (alreadySelected && onPointClickCb) {
-      onPointClickCb(alreadySelected.id, alreadySelected.nearestIdx);
-    }
-
     setTimeout(() => {
       document.querySelectorAll('.nearest-item').forEach(el => {
         el.addEventListener('click', () => {
