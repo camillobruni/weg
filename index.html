@@ -19,6 +19,14 @@
 </head>
 <body>
   <div id="app">
+    <div id="global-loader" class="hidden">
+      <div class="spinner"></div>
+      <div id="loader-text">Importing tracks...</div>
+      <div id="loader-subtext"></div>
+      <div id="loader-progress-wrap">
+        <div id="loader-progress-bar"></div>
+      </div>
+    </div>
 
     <!-- ── Sidebar ── -->
     <aside id="sidebar">
@@ -117,6 +125,9 @@
             <button class="mini-pill" data-metric="hr" title="Heart Rate"><span class="material-symbols-rounded">favorite</span></button>
             <button class="mini-pill" data-metric="cadence" title="Cadence"><span class="material-symbols-rounded">directions_run</span></button>
             <button class="mini-pill" data-metric="temperature" title="Temperature"><span class="material-symbols-rounded">thermostat</span></button>
+            <button class="mini-pill" data-metric="battery" title="Battery"><span class="material-symbols-rounded">battery_full</span></button>
+            <button class="mini-pill" data-metric="gearRear" title="Rear Gear"><span class="material-symbols-rounded">settings</span></button>
+            <button class="mini-pill" data-metric="gearFront" title="Front Gear"><span class="material-symbols-rounded">settings_input_component</span></button>
           </div>
         </div>
         <div class="filter-footer">
@@ -193,6 +204,15 @@
               </button>
               <button class="metric-pill"        data-metric="temperature" style="--pill-color:#F8C471" title="Toggle Temperature graph" draggable="true">
                 <span class="material-symbols-rounded">thermostat</span>Temp
+              </button>
+              <button class="metric-pill"        data-metric="battery"     style="--pill-color:#45B7D1" title="Toggle Battery graph" draggable="true">
+                <span class="material-symbols-rounded">battery_full</span>Battery
+              </button>
+              <button class="metric-pill"        data-metric="gearRear"    style="--pill-color:#82E0AA" title="Toggle Rear Gear graph" draggable="true">
+                <span class="material-symbols-rounded">settings</span>Rear Gear
+              </button>
+              <button class="metric-pill"        data-metric="gearFront"   style="--pill-color:#A8C8A0" title="Toggle Front Gear graph" draggable="true">
+                <span class="material-symbols-rounded">settings_input_component</span>Front Gear
               </button>
             </div>
             <div id="chart-options">

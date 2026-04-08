@@ -6,7 +6,7 @@
 
 import { TrackData } from '../parsers';
 import { Storage } from '../storage';
-import { fmtSecs, escHtml, fmtDateTime } from '../utils';
+import { fmtSecs, escHtml, fmtDateTime, getTagColor } from '../utils';
 
 let onTagsChangeCb: () => void = () => {};
 export function initDetails(onTagsChange: () => void) {
@@ -57,12 +57,24 @@ export function renderDetails(track: TrackData, globalTags: string[] = []) {
             <div class="details-card-label" style="font-size:10px">Max Speed</div>
             <div class="details-card-value" style="font-size:16px">${(s.maxSpeed * 3.6).toFixed(1)} km/h</div>
           </div>
+          ${
+            s.avgBattery !== null
+              ? `<div class="details-card" style="padding: 12px">
+                  <div class="details-card-label" style="font-size:10px">Avg Battery</div>
+                  <div class="details-card-value" style="font-size:16px">${s.avgBattery}%</div>
+                </div>`
+              : ''
+          }
         </div>
       </div>
 
       <div class="insight-card">
         <div class="insight-title"><span class="material-symbols-rounded">info</span>File Metadata</div>
         <div class="details-grid" style="grid-template-columns: 1fr; gap: 12px; margin-top: 4px">
+          <div class="details-card" style="padding: 12px">
+            <div class="details-card-label" style="font-size:10px">Original Filename</div>
+            <div class="details-card-value" style="font-size:13px; word-break:break-all">${escHtml(track.fileName || '—')}</div>
+          </div>
           <div class="details-card" style="padding: 12px">
             <div class="details-card-label" style="font-size:10px">Format</div>
             <div class="details-card-value" style="font-size:16px">${track.format.toUpperCase()}</div>
@@ -144,6 +156,99 @@ export function renderDetails(track: TrackData, globalTags: string[] = []) {
       </div>`
           : ''
       }
+
+      ${
+        s.shifts !== null
+          ? `
+      <div class="insight-card">
+        <div class="insight-title"><span class="material-symbols-rounded">settings</span>Drivetrain</div>
+        <div class="details-grid" style="grid-template-columns: 1fr; gap: 12px; margin-top: 4px">
+          <div class="details-card" style="padding: 12px">
+            <div class="details-card-label" style="font-size:10px">Total Shifts</div>
+            <div class="details-card-value" style="font-size:16px">${s.shifts}</div>
+          </div>
+        </div>
+      </div>`
+          : ''
+      }
+
+      ${
+        track.devices && track.devices.length > 0
+          ? `
+      <div class="insight-card">
+        <div class="insight-title"><span class="material-symbols-rounded">watch</span>Hardware & Sensors</div>
+        <div style="display:flex; flex-direction:column; gap:8px; margin-top:4px">
+          ${(() => {
+            const seen = new Set();
+            return track.devices!
+              .filter((d) => {
+                const hasIdentifiableInfo = d.name || d.product || d.manufacturer;
+                if (!hasIdentifiableInfo) return false;
+
+                const key = `${d.name}|${d.product}|${d.manufacturer}|${d.serial}`;
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+              })
+              .map((d) => {
+                const name = d.name || d.product || 'Unknown Device';
+                const manufacturer = d.manufacturer ? `<span style="color:var(--text-dim)">${d.manufacturer}</span>` : '';
+                const extra = [
+                  d.serial ? `SN: ${d.serial}` : null,
+                  d.version ? `v${d.version}` : null,
+                  d.hardwareVersion ? `hw:${d.hardwareVersion}` : null,
+                ]
+                  .filter(Boolean)
+                  .join(' • ');
+
+                const battery = [
+                  d.batteryLevel ? `${d.batteryLevel}%` : null,
+                  d.batteryStatus ? `Status: ${d.batteryStatus}` : null,
+                  d.batteryVoltage ? `${d.batteryVoltage.toFixed(2)}V` : null,
+                ]
+                  .filter(Boolean)
+                  .join(' • ');
+
+                let sourceIcon = '';
+                const st = (d.sourceType || '').toLowerCase();
+                if (st.includes('local')) sourceIcon = 'memory';
+                else if (st.includes('antplus') || st.includes('ant_plus')) sourceIcon = 'settings_input_antenna';
+                else if (st.includes('bluetooth')) sourceIcon = 'bluetooth';
+
+                return `
+                <div class="details-card" style="padding: 10px">
+                  <div style="display:flex; justify-content:space-between; align-items:baseline">
+                    <div style="display:flex; align-items:center; gap:6px">
+                      <div style="font-size:13px; font-weight:700; color:var(--text)">${escHtml(name)}</div>
+                      ${sourceIcon ? `<span class="material-symbols-rounded" style="font-size:14px; color:var(--text-dim)" title="${d.sourceType}">${sourceIcon}</span>` : ''}
+                    </div>
+                    <div style="font-size:10px; font-weight:600">${manufacturer}</div>
+                  </div>
+                  ${
+                    extra
+                      ? `<div style="font-size:10px; color:var(--text-dim); margin-top:2px">${escHtml(extra)}</div>`
+                      : ''
+                  }
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px">
+                    <div style="font-size:9px; color:var(--accent); font-weight:800; text-transform:uppercase; letter-spacing:0.5px">${escHtml(d.type || 'device')}</div>
+                    ${
+                      battery
+                        ? `<div style="font-size:10px; color:var(--text-muted); display:flex; align-items:center; gap:4px">
+                            <span class="material-symbols-rounded" style="font-size:12px">battery_charging_full</span>
+                            ${escHtml(battery)}
+                           </div>`
+                        : ''
+                    }
+                  </div>
+                </div>
+              `;
+              })
+              .join('');
+          })()}
+        </div>
+      </div>`
+          : ''
+      }
     </div>
   `;
 
@@ -159,12 +264,13 @@ export function renderDetails(track: TrackData, globalTags: string[] = []) {
       return;
     }
     tags.forEach((tag) => {
+      const c = getTagColor(tag);
       const el = document.createElement('div');
       el.className = 'tag-pill';
       el.style.cssText = `
-        background: var(--surface2);
-        border: 1px solid var(--border);
-        color: var(--text-muted);
+        background: ${c}15;
+        border: 1px solid ${c}44;
+        color: ${c};
         padding: 2px 8px;
         border-radius: 4px;
         font-size: 11px;
@@ -175,7 +281,7 @@ export function renderDetails(track: TrackData, globalTags: string[] = []) {
       `;
       el.innerHTML = `
         <span>${escHtml(tag)}</span>
-        <span class="material-symbols-rounded btn-remove-tag" data-tag="${tag}" style="font-size:14px; cursor:pointer; color:var(--text-dim)">close</span>
+        <span class="material-symbols-rounded btn-remove-tag" data-tag="${tag}" style="font-size:14px; cursor:pointer; color:${c}aa">close</span>
       `;
       tagContainer.appendChild(el);
     });

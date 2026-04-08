@@ -13,7 +13,7 @@ import { MapView } from './map';
 import { ChartView } from './charts';
 import { renderDetails, initDetails } from './tabs/details';
 import { renderInsights, initInsights } from './tabs/insights';
-import { fmtSecs, escHtml, fmtDate } from './utils';
+import { fmtSecs, escHtml, fmtDate, getTagColor } from './utils';
 
 const TRACK_COLORS: string[] = [
   '#FF6B35',
@@ -240,7 +240,20 @@ document.addEventListener('click', (e) => {
 
 // ── Boot ──────────────────────────────────────────────────────────
 async function init() {
-  const urlState = UrlState.get();
+  const loader = document.getElementById('global-loader');
+  const loaderText = document.getElementById('loader-text');
+  const loaderSubtext = document.getElementById('loader-subtext');
+  const progressBar = document.getElementById('loader-progress-bar') as HTMLElement;
+
+  if (loader) {
+    if (loaderText) loaderText.textContent = 'Loading database...';
+    if (loaderSubtext) loaderSubtext.textContent = '';
+    if (progressBar) progressBar.style.width = '0%';
+    loader.classList.remove('hidden');
+  }
+
+  try {
+    const urlState = UrlState.get();
 
   initInsights(showToast);
   initDetails(() => {
@@ -337,14 +350,28 @@ async function init() {
 
     const saved = await Storage.getAll();
     saved.sort((a, b) => a.addedAt - b.addedAt);
-    for (const t of saved) {
+
+    if (loaderText) loaderText.textContent = `Loading ${saved.length} tracks...`;
+
+    for (let i = 0; i < saved.length; i++) {
+      const t = saved[i];
+      if (loaderSubtext) loaderSubtext.textContent = t.name;
+      if (progressBar) progressBar.style.width = `${(i / saved.length) * 100}%`;
+
       // Migration: re-calculate stats if new insights are missing or old format
       const powerCurveEntries = t.stats.powerCurve ? Object.values(t.stats.powerCurve) : [];
+
+      // Check if points need re-enrichment (e.g. missing calculated speed or gradient)
+      const needsEnrich = t.points.length > 1 && 
+        (t.points[1].speed === undefined || t.points[1].gradient === undefined);
+
       const needsRecalc = 
-        (!t.stats.powerCurve || !t.stats.hrZones || !t.stats.hrCurve) ||
+        needsEnrich ||
+        (!t.stats.powerCurve || !t.stats.hrZones || !t.stats.hrCurve || t.stats.shifts === undefined || t.stats.avgBattery === undefined) ||
         (powerCurveEntries.length > 0 && typeof (powerCurveEntries[0] as any) === 'number');
 
       if (needsRecalc) {
+        if (needsEnrich) t.points = Parsers.enrichPoints(t.points);
         t.stats = Parsers.computeStats(t.points);
         await Storage.save(t);
       }
@@ -352,7 +379,6 @@ async function init() {
       colorIdx = Math.max(colorIdx, TRACK_COLORS.indexOf(t.color) + 1);
       MapView.addTrack(t);
     }
-
     applyFilters(); // Filter and render list/map
 
     // Only fit all if no saved map position
@@ -558,11 +584,14 @@ async function init() {
   });
 
   // Resize charts when window changes
-  window.addEventListener('resize', () => {
-    ChartView.resize();
-    MapView.invalidateSize?.();
-    updateToolbarLayout();
-  });
+    window.addEventListener('resize', () => {
+      ChartView.resize();
+      MapView.invalidateSize?.();
+      updateToolbarLayout();
+    });
+  } finally {
+    if (loader) loader.classList.add('hidden');
+  }
 }
 
 function initResizeHandle() {
@@ -840,7 +869,10 @@ function buildTrackItem(track: TrackData) {
       : 'Unknown date';
 
   const tagsHtml = (track.tags || []).length > 0 
-    ? `<div class="track-tags">${(track.tags || []).map(t => `<span class="track-tag">${escHtml(t)}</span>`).join('')}</div>`
+    ? `<div class="track-tags">${(track.tags || []).map(t => {
+        const c = getTagColor(t);
+        return `<span class="track-tag" style="border-color:${c}44; color:${c}">${escHtml(t)}</span>`;
+      }).join('')}</div>`
     : '';
 
   item.innerHTML = `
@@ -957,42 +989,133 @@ function initDropZone() {
     }
   });
 
-  window.addEventListener('drop', (e) => {
+  window.addEventListener('drop', async (e) => {
     e.preventDefault();
     zone.classList.remove('drag-over');
-    const files = Array.from(e.dataTransfer?.files || []);
+    
+    const items = e.dataTransfer?.items;
+    if (!items) return;
+
+    const files: File[] = [];
+    const queue: FileSystemEntry[] = [];
+
+    for (let i = 0; i < items.length; i++) {
+      const entry = items[i].webkitGetAsEntry();
+      if (entry) queue.push(entry);
+    }
+
+    while (queue.length > 0) {
+      const entry = queue.shift()!;
+      if (entry.isFile) {
+        const file = await new Promise<File>((res) => (entry as FileSystemFileEntry).file(res));
+        files.push(file);
+      } else if (entry.isDirectory) {
+        const reader = (entry as FileSystemDirectoryEntry).createReader();
+        const entries = await new Promise<FileSystemEntry[]>((res) => reader.readEntries(res));
+        queue.push(...entries);
+      }
+    }
+
     if (files.length) handleFiles(files);
   });
 }
 
 async function handleFiles(files: File[]) {
   if (!files.length) return;
-  let count = 0;
-  for (const f of files) {
-    try {
-      const data = await Parsers.parseFile(f);
-      const id = crypto.randomUUID();
-      const track: TrackData = {
-        ...data,
-        id,
-        color: TRACK_COLORS[colorIdx % TRACK_COLORS.length],
-        addedAt: Date.now(),
-        visible: true,
-      };
-      colorIdx++;
+  
+  const loader = document.getElementById('global-loader');
+  const loaderText = document.getElementById('loader-text');
+  const loaderSubtext = document.getElementById('loader-subtext');
+  const progressBar = document.getElementById('loader-progress-bar') as HTMLElement;
 
-      await Storage.save(track);
-      tracks[id] = track;
-      MapView.addTrack(track);
-      count++;
-    } catch (e) {
-      console.warn('Failed to parse file:', f.name, e);
-      showToast(`Error parsing ${f.name}`, 'error');
-    }
+  if (loader) {
+    if (loaderText) loaderText.textContent = `Importing ${files.length} file${files.length > 1 ? 's' : ''}...`;
+    if (loaderSubtext) loaderSubtext.textContent = '';
+    if (progressBar) progressBar.style.width = '0%';
+    loader.classList.remove('hidden');
   }
-  if (count > 0) {
-    showToast(`Added ${count} track${count > 1 ? 's' : ''}`);
-    applyFilters();
+
+  try {
+    let count = 0;
+    let firstId: string | null = null;
+    let processedSinceLastUpdate = 0;
+
+    // Filter out obviously invalid files early
+    const validFiles = files.filter(f => {
+      const name = f.name.toLowerCase();
+      return name.endsWith('.gpx') || name.endsWith('.fit') || name.endsWith('.tcx') || name.endsWith('.kml');
+    });
+
+    if (validFiles.length === 0) {
+      if (files.length > 0) showToast('No valid GPS files found', 'error');
+      return;
+    }
+
+    for (let i = 0; i < validFiles.length; i++) {
+      const f = validFiles[i];
+      if (loaderSubtext) loaderSubtext.textContent = f.name;
+      if (progressBar) progressBar.style.width = `${(i / validFiles.length) * 100}%`;
+
+      try {
+        const data = await Parsers.parseFile(f);
+        const id = crypto.randomUUID();
+
+        // Use filename as activity name if internal name is generic
+        let trackName = data.name;
+        if (trackName.startsWith('Unnamed') || trackName.startsWith('Fit Activity')) {
+          trackName = f.name;
+        }
+
+        const track: TrackData = {
+          ...data,
+          id,
+          name: trackName,
+          fileName: f.name,
+          color: TRACK_COLORS[colorIdx % TRACK_COLORS.length],
+          addedAt: Date.now(),
+          visible: true,
+        };
+        colorIdx++;
+
+        if (!firstId) firstId = id;
+
+        await Storage.save(track);
+        tracks[id] = track;
+        MapView.addTrack(track);
+        count++;
+        processedSinceLastUpdate++;
+
+        // Update UI incrementally for large batches
+        if (processedSinceLastUpdate >= 5) {
+          applyFilters();
+          processedSinceLastUpdate = 0;
+        }
+      } catch (e) {
+        console.warn('Failed to parse file:', f.name, e);
+        showToast(`Error parsing ${f.name}`, 'error');
+      }
+    }
+
+    if (count > 0) {
+      applyFilters();
+      
+      const visibleCount = Object.values(tracks).filter(t => !t._filtered && validFiles.some(f => f.name.includes(t.name) || t.name.includes(f.name))).length;
+      const hiddenByFilter = count - visibleCount;
+
+      let msg = `Added ${count} track${count > 1 ? 's' : ''}`;
+      if (hiddenByFilter > 0) {
+        msg += ` (${hiddenByFilter} hidden by active filters)`;
+      }
+      showToast(msg);
+
+      // Auto-select if only one added, or if nothing was selected
+      if (firstId && (count === 1 || !selectedId)) {
+        selectTrack(firstId);
+      }
+    }
+  } finally {
+    if (loader) loader.classList.add('hidden');
+    if (progressBar) progressBar.style.width = '0%';
   }
 }
 

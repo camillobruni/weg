@@ -16,6 +16,9 @@ export interface TrackPoint {
   power: number | null;
   speed: number | null;
   temp: number | null;
+  gearFront: number | null;
+  gearRear: number | null;
+  battery: number | null;
   dist?: number;
   gradient?: number | null;
 }
@@ -38,12 +41,30 @@ export interface TrackStats {
   hrCurve?: Record<number, { hr: number; idx: number }> | null;
   hrZones?: number[] | null; // Time in seconds for each zone
   powerZones?: number[] | null; // Time in seconds for each zone
+  shifts?: number | null; // Total number of shifts detected
+  avgBattery?: number | null;
+}
+
+export interface DeviceInfo {
+  name?: string;
+  manufacturer?: string;
+  product?: string;
+  serial?: string;
+  version?: string;
+  hardwareVersion?: string;
+  type?: string;
+  batteryStatus?: string;
+  batteryVoltage?: number;
+  batteryLevel?: number;
+  sourceType?: string;
 }
 
 export interface TrackData {
   id: string;
   name: string;
+  fileName?: string;
   device: string | null;
+  devices?: DeviceInfo[];
   format: 'gpx' | 'fit' | 'tcx' | 'kml';
   points: TrackPoint[];
   stats: TrackStats;
@@ -73,11 +94,40 @@ export const Parsers = (() => {
   function enrichPoints(pts: TrackPoint[]): TrackPoint[] {
     let totalDist = 0;
     for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
       if (i > 0) {
-        totalDist += haversine(pts[i - 1].lat, pts[i - 1].lon, pts[i].lat, pts[i].lon);
+        const prev = pts[i - 1];
+        const d = haversine(prev.lat, prev.lon, p.lat, p.lon);
+        totalDist += d;
+
+        // Calculate speed if missing (m/s)
+        if (p.speed == null && p.time != null && prev.time != null) {
+          const dt = (p.time - prev.time) / 1000;
+          if (dt > 0 && dt < 10) { // Skip big gaps
+            p.speed = d / dt;
+          }
+        }
+
+        // Calculate gradient if missing (%)
+        if (p.gradient === undefined && p.ele != null && prev.ele != null) {
+          const de = p.ele - prev.ele;
+          if (d > 0.5) { // Only calculate for non-tiny movements to reduce jitter
+            p.gradient = (de / d) * 100;
+          } else {
+            p.gradient = prev.gradient || 0;
+          }
+        }
       }
-      pts[i].dist = totalDist;
+      p.dist = totalDist;
     }
+
+    // Optional: basic smoothing for gradient
+    for (let i = 1; i < pts.length - 1; i++) {
+      if (pts[i].gradient != null && pts[i - 1].gradient != null && pts[i + 1].gradient != null) {
+        pts[i].gradient = (pts[i - 1].gradient! + pts[i].gradient! + pts[i + 1].gradient!) / 3;
+      }
+    }
+
     return pts;
   }
 
@@ -112,7 +162,11 @@ export const Parsers = (() => {
       cadN = 0;
     let speedSum = 0,
       speedN = 0;
+    let batterySum = 0,
+      batteryN = 0;
     let hasTemp = false;
+    let shifts = 0;
+    let hasGears = false;
 
     for (let i = 0; i < pts.length; i++) {
       const p = pts[i];
@@ -122,6 +176,12 @@ export const Parsers = (() => {
           const diff = p.ele - prev.ele;
           if (diff > 0) stats.elevGain += diff;
           else stats.elevLoss -= diff;
+        }
+        if (
+          (p.gearFront != null && p.gearFront !== prev.gearFront) ||
+          (p.gearRear != null && p.gearRear !== prev.gearRear)
+        ) {
+          shifts++;
         }
       }
       if (p.power != null) {
@@ -143,7 +203,12 @@ export const Parsers = (() => {
         speedN++;
         if (p.speed > stats.maxSpeed) stats.maxSpeed = p.speed;
       }
+      if (p.battery != null) {
+        batterySum += p.battery;
+        batteryN++;
+      }
       if (p.temp != null) hasTemp = true;
+      if (p.gearFront != null || p.gearRear != null) hasGears = true;
     }
 
     stats.totalDist = pts[pts.length - 1].dist || 0;
@@ -151,6 +216,8 @@ export const Parsers = (() => {
     stats.avgHR = hrN ? Math.round(hrSum / hrN) : null;
     stats.avgCadence = cadN ? Math.round(cadSum / cadN) : null;
     stats.avgSpeed = speedN ? speedSum / speedN : null;
+    stats.avgBattery = batteryN ? Math.round(batterySum / batteryN) : null;
+    stats.shifts = hasGears ? shifts : null;
 
     const t0 = pts[0].time;
     const t1 = pts[pts.length - 1].time;
@@ -170,6 +237,8 @@ export const Parsers = (() => {
       stats.powerZones = calculatePowerZones(pts);
     }
     if (hasTemp) stats.sensors.push('Temperature');
+    if (hasGears) stats.sensors.push('Shifting');
+    if (batteryN) stats.sensors.push('Battery');
 
     return stats;
   }
@@ -367,6 +436,9 @@ export const Parsers = (() => {
         power,
         speed: null, // GPX usually doesn't have speed per point
         temp,
+        gearFront: null,
+        gearRear: null,
+        battery: null,
       };
     });
 
@@ -393,7 +465,7 @@ export const Parsers = (() => {
     const device = deviceEl ? deviceEl.textContent?.trim() || null : null;
 
     const trackpts = Array.from(doc.querySelectorAll('Trackpoint'));
-    const points: TrackPoint[] = trackpts
+    const points = trackpts
       .map((el) => {
         const latEl = el.querySelector('LatitudeDegrees');
         const lonEl = el.querySelector('LongitudeDegrees');
@@ -429,7 +501,10 @@ export const Parsers = (() => {
           power,
           speed,
           temp,
-        };
+          gearFront: null,
+          gearRear: null,
+          battery: null,
+        } as TrackPoint;
       })
       .filter((p): p is TrackPoint => p !== null);
 
@@ -458,9 +533,106 @@ export const Parsers = (() => {
           const name = data.sessions?.[0]?.start_time
             ? `Fit Activity ${new Date(data.sessions[0].start_time).toISOString().split('T')[0]}`
             : 'Unnamed Fit';
-          const device = data.device_infos?.[0]?.product_name || null;
+          
+          // Better device detection
+          let device: string | null = null;
+          const devices: DeviceInfo[] = [];
+
+          const getDeviceName = (d: any) => d.product || d.product_name || d.garmin_product || d.device_type || d.manufacturer || null;
+
+          if (data.file_ids?.[0]) {
+            const fid = data.file_ids[0];
+            device = getDeviceName(fid);
+            devices.push({
+              name: fid.product || fid.product_name || fid.garmin_product,
+              manufacturer: fid.manufacturer,
+              serial: fid.serial_number ? String(fid.serial_number) : undefined,
+              version: fid.software_version ? String(fid.software_version) : undefined,
+              type: 'main',
+            });
+          }
+
+          if (data.device_infos) {
+            data.device_infos.forEach((d: any) => {
+              const isMain = d.device_index === 'creator' || d.device_index === 0;
+              
+              if (isMain) {
+                const name = getDeviceName(d);
+                if (!device) device = name;
+                // Update existing main device if needed
+                if (devices.length > 0 && devices[0].type === 'main') {
+                  if (!devices[0].name) devices[0].name = d.product || d.product_name || d.garmin_product;
+                  if (!devices[0].manufacturer) devices[0].manufacturer = d.manufacturer;
+                  if (!devices[0].serial && d.serial_number) devices[0].serial = String(d.serial_number);
+                  if (!devices[0].version && d.software_version) devices[0].version = String(d.software_version);
+                  if (!devices[0].hardwareVersion && d.hardware_version) devices[0].hardwareVersion = String(d.hardware_version);
+                }
+                return;
+              }
+
+              devices.push({
+                name: d.product || d.product_name || d.garmin_product || d.device_type || 'Sensor',
+                manufacturer: d.manufacturer,
+                serial: d.serial_number ? String(d.serial_number) : undefined,
+                version: d.software_version ? String(d.software_version) : undefined,
+                hardwareVersion: d.hardware_version ? String(d.hardware_version) : undefined,
+                type: d.device_type || 'sensor',
+                batteryStatus: d.battery_status,
+                batteryVoltage: d.battery_voltage,
+                batteryLevel: d.battery_level,
+                sourceType: d.source_type,
+              });
+            });
+          }
+
+          if (data.sensor_settings) {
+            data.sensor_settings.forEach((s: any) => {
+              const name = s.name || s.product || s.sensor_type;
+              if (!name) return;
+
+              // Check if we already have this device (by ANT ID or name)
+              const antId = s.ant_id ? String(s.ant_id) : undefined;
+              const existing = devices.find(d => 
+                (antId && d.serial === antId) || 
+                (d.name === name && d.manufacturer === s.manufacturer)
+              );
+
+              if (existing) {
+                if (!existing.name) existing.name = name;
+                if (!existing.manufacturer) existing.manufacturer = s.manufacturer;
+                if (!existing.type) existing.type = s.sensor_type;
+                if (!existing.sourceType) existing.sourceType = s.connection_type;
+              } else {
+                devices.push({
+                  name: name,
+                  manufacturer: s.manufacturer,
+                  serial: antId,
+                  type: s.sensor_type || 'sensor',
+                  sourceType: s.connection_type,
+                });
+              }
+            });
+          }
+
+          // Collect standalone device status reports (often contains head unit battery)
+          // We'll store them in a sorted array for easier lookups
+          const statusReports: { time: number, level: number | null }[] = [];
+          if (data.device_statuses) {
+            data.device_statuses.forEach((s: any) => {
+              if (s.timestamp && s.battery_level != null) {
+                statusReports.push({
+                  time: new Date(s.timestamp).getTime(),
+                  level: s.battery_level
+                });
+              }
+            });
+            statusReports.sort((a, b) => a.time - b.time);
+          }
 
           const records = data.records || [];
+          let lastBattery: number | null = null;
+          let statusIdx = 0;
+
           const points = records.map((r: any) => {
             const lat = r.position_lat;
             const lon = r.position_long;
@@ -468,6 +640,21 @@ export const Parsers = (() => {
 
             const time = r.timestamp ? new Date(r.timestamp).getTime() : null;
             const speed = r.speed != null ? r.speed / 3.6 : null; // km/h → m/s
+            
+            let battery = r.battery_level ?? null;
+            
+            // If not in record, check our status reports
+            if (battery == null && time) {
+              // Catch up statusIdx to current time
+              while (statusIdx < statusReports.length && statusReports[statusIdx].time <= time) {
+                lastBattery = statusReports[statusIdx].level;
+                statusIdx++;
+              }
+              battery = lastBattery;
+            } else if (battery != null) {
+              lastBattery = battery;
+            }
+
             return {
               lat,
               lon,
@@ -478,7 +665,10 @@ export const Parsers = (() => {
               power: r.power ?? null,
               speed,
               temp: r.temperature ?? null,
-            };
+              gearFront: r.front_gear_num ?? null,
+              gearRear: r.rear_gear_num ?? null,
+              battery,
+            } as TrackPoint;
           });
           const validPoints = points.filter((p: any): p is TrackPoint => p !== null);
 
@@ -489,7 +679,7 @@ export const Parsers = (() => {
 
           const pts = enrichPoints(validPoints);
           const stats = computeStats(pts);
-          resolve({ name, device, format: 'fit', points: pts, stats });
+          resolve({ name, device, devices, format: 'fit', points: pts, stats });
         } catch (ex) {
           reject(ex);
         }
@@ -530,6 +720,9 @@ export const Parsers = (() => {
           power: null,
           speed: null,
           temp: null,
+          gearFront: null,
+          gearRear: null,
+          battery: null,
         });
       });
     });
@@ -561,6 +754,7 @@ export const Parsers = (() => {
   return {
     parseFile,
     computeStats,
+    enrichPoints,
     setHRZones,
     getHRZones,
     setFTP,

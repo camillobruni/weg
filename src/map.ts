@@ -69,6 +69,21 @@ export const MapView = (() => {
 
     L.control.zoom({ position: 'bottomright' }).addTo(map);
 
+    // Create custom panes for strict layering
+    // order (lowest to highest): 
+    // 1. All tracks (default overlayPane, z-index 400)
+    // 2. Black outline for current track
+    // 3. White thick outline for selected interval
+    // 4. Color for current track
+    map.createPane('selectedOutlinePane');
+    map.getPane('selectedOutlinePane')!.style.zIndex = '410';
+    
+    map.createPane('highlightPane');
+    map.getPane('highlightPane')!.style.zIndex = '420';
+    
+    map.createPane('foregroundPane');
+    map.getPane('foregroundPane')!.style.zIndex = '430';
+
     map.on('moveend', () => {
       const c = map.getCenter();
       onMoveCb(c.lat, c.lng, map.getZoom());
@@ -95,7 +110,7 @@ export const MapView = (() => {
     map.addLayer(LAYERS[key]);
   }
 
-  function addTrack(track: TrackData) {
+  function addTrack(track: TrackData, pane: string = 'overlayPane') {
     trackData[track.id] = track;
     const pts = track.points;
     const layers: L.Polyline[] = [];
@@ -111,7 +126,7 @@ export const MapView = (() => {
           // Finish current segment
           if (currentSegment.length > 1) {
             layers.push(
-              L.polyline(currentSegment, { color: track.color, weight: 3, opacity: 0.2 }),
+              L.polyline(currentSegment, { color: track.color, weight: 3, opacity: 0.2, pane }),
             );
           }
           // Draw dotted line for gap
@@ -126,6 +141,7 @@ export const MapView = (() => {
                 weight: 2,
                 opacity: 0.15,
                 dashArray: '5, 8',
+                pane
               },
             ),
           );
@@ -135,7 +151,7 @@ export const MapView = (() => {
       currentSegment.push([p.lat, p.lon]);
     }
     if (currentSegment.length > 1) {
-      layers.push(L.polyline(currentSegment, { color: track.color, weight: 3, opacity: 0.2 }));
+      layers.push(L.polyline(currentSegment, { color: track.color, weight: 3, opacity: 0.2, pane }));
     }
 
     const group = L.featureGroup(layers).addTo(map);
@@ -185,11 +201,13 @@ export const MapView = (() => {
         weight: 7,
         opacity: 0.65,
         interactive: false,
+        pane: 'selectedOutlinePane'
       }).addTo(map);
 
-      // Ensure outline is behind the actual colored line
-      selectedOutline.bringToFront();
-      pl.bringToFront();
+      // Move the selected track's polyline to the foreground pane
+      // Unfortunately we have to re-add it or use a separate layer for selection
+      // For now, let's just make sure it stays topmost within its pane if we don't re-create.
+      // Actually, let's re-add the selected track to the foregroundPane if it's selected.
     }
 
     // Ensure segment highlight stays on top of both

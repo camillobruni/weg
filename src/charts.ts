@@ -190,6 +190,36 @@ export const ChartView = (() => {
       fmt: (v) => v.toFixed(1),
       fmtAxis: (v) => Math.round(v).toString(),
     },
+    gearRear: {
+      label: 'Rear Gear',
+      field: 'gearRear',
+      unit: '',
+      color: '#82E0AA',
+      abbr: 'rgr',
+      icon: 'settings',
+      fmt: (v) => Math.round(v).toString(),
+      fmtAxis: (v) => Math.round(v).toString(),
+    },
+    gearFront: {
+      label: 'Front Gear',
+      field: 'gearFront',
+      unit: '',
+      color: '#A8C8A0',
+      abbr: 'fgr',
+      icon: 'settings_input_component',
+      fmt: (v) => Math.round(v).toString(),
+      fmtAxis: (v) => Math.round(v).toString(),
+    },
+    battery: {
+      label: 'Battery',
+      field: 'battery',
+      unit: '%',
+      color: '#45B7D1',
+      abbr: 'bat',
+      icon: 'battery_full',
+      fmt: (v) => Math.round(v).toString(),
+      fmtAxis: (v) => Math.round(v).toString(),
+    },
   };
 
   // ── Init ──────────────────────────────────────────────────────
@@ -334,6 +364,9 @@ export const ChartView = (() => {
     if (activeMetrics.size === 0) {
       activeMetrics = new Set(availableMetrics);
       activeMetrics.delete('gradient');
+      activeMetrics.delete('battery');
+      activeMetrics.delete('gearRear');
+      activeMetrics.delete('gearFront');
     }
 
     // Sync the pill buttons in the toolbar
@@ -863,6 +896,9 @@ export const ChartView = (() => {
               fill: hexToRgba(def.color, 0.08),
               width: 1.5,
               points: { show: false },
+              paths: (metricKey === 'gearRear' || metricKey === 'gearFront') 
+                ? uPlot.paths.stepped!({ align: 1 }) 
+                : undefined,
             },
       ],
       hooks: {
