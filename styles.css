@@ -94,7 +94,6 @@ input  { font: inherit; }
   padding: 16px 12px;
   text-align: center;
   transition: all 0.15s;
-  cursor: default;
 }
 #drop-zone.drag-over {
   border-color: var(--accent);
@@ -103,15 +102,24 @@ input  { font: inherit; }
 .drop-icon    { font-size: 22px; color: var(--text-muted); margin-bottom: 4px; }
 .drop-primary { font-size: 12px; font-weight: 500; color: var(--text); }
 .drop-formats { font-size: 10px; color: var(--text-muted); margin-top: 3px; letter-spacing: 0.5px; }
-.drop-browse  {
-  display: inline-block;
+.drop-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
   margin-top: 8px;
+}
+.drop-btn {
   font-size: 11px;
   color: var(--accent);
+  border: 1px solid var(--accent) !important;
+  border-radius: 4px;
+  padding: 2px 10px;
+  background: none;
   cursor: pointer;
-  text-decoration: underline;
-  text-underline-offset: 2px;
+  opacity: 0.8;
+  transition: opacity 0.1s, background 0.1s;
 }
+.drop-btn:hover { opacity: 1; background: rgba(59,130,246,0.1); }
 .drop-browse:hover { color: var(--accent-hover); }
 
 /* Track list header */
@@ -220,6 +228,7 @@ input  { font: inherit; }
 }
 .icon-btn.hidden { display: none; }
 .icon-btn:hover { background: var(--surface2); color: var(--text); }
+.icon-btn.active { background: var(--surface2); color: var(--accent); }
 .icon-btn.danger:hover { background: rgba(239,68,68,0.12); color: var(--danger); }
 
 .eye-btn { font-size: 13px; }
@@ -569,6 +578,51 @@ input  { font: inherit; }
   overflow-x: hidden;
   padding: 6px 0 4px;
 }
+
+/* Histogram column (inline, per chart row) */
+.chart-row-body {
+  display: flex;
+  flex-direction: row;
+}
+.hist-col {
+  width: 130px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  margin-left: 10px;
+  margin-right: 55px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  cursor: crosshair;
+}
+.hist-col.visible { display: flex; }
+.hist-canvas { display: block; }
+
+/* Histogram connector line */
+#hist-line {
+  position: fixed;
+  height: 0;
+  border-top: 1px dashed rgba(255,255,255,0.25);
+  pointer-events: none;
+  display: none;
+  z-index: 10000;
+}
+
+/* Histogram tooltip */
+#hist-tooltip {
+  position: fixed;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: 5px;
+  padding: 5px 9px;
+  font-size: 11px;
+  color: var(--text);
+  pointer-events: none;
+  display: none;
+  z-index: 9000;
+  white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
 #charts-container::-webkit-scrollbar { width: 4px; }
 #charts-container::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
 
@@ -596,6 +650,19 @@ input  { font: inherit; }
   min-height: 28px;
 }
 
+/* Map color toggle button (inline with chart label) */
+.map-color-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  flex-shrink: 0;
+  opacity: 0.4;
+  transition: opacity 0.15s;
+}
+.map-color-btn:hover { opacity: 0.8; }
+.map-color-btn.active { opacity: 1; color: var(--accent); background: var(--surface2); }
+.map-color-btn .material-symbols-rounded { font-size: 14px; }
+
 /* label moves to header now (not absolutely positioned) */
 .chart-row .chart-row-label {
   position: static;
@@ -617,15 +684,6 @@ input  { font: inherit; }
 }
 .mm-item { display: flex; align-items: baseline; gap: 3px; }
 .mm-l    { font-size: 9px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-dim); margin-right: 1px; }
-
-.chart-cur-value {
-  font-size: 12px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  min-width: 70px;
-  text-align: right;
-  flex-shrink: 0;
-}
 
 
 /* ── uPlot overrides ─────────────────────────────────────── */
@@ -660,9 +718,10 @@ input  { font: inherit; }
   position: absolute;
   top: 50%;
   transform: translate(-50%, -50%);
-  width: 10px;
-  height: 28px;
-  background: var(--surface2);
+  width: 8px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(0, 0, 0, 0.3);
   border-radius: 4px;
   cursor: ew-resize;
   pointer-events: auto;
@@ -670,23 +729,26 @@ input  { font: inherit; }
   align-items: center;
   justify-content: center;
   z-index: 10;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.3);
 }
 .sel-handle::after {
   content: '';
   width: 2px;
-  height: 14px;
-  border-left: 1px solid var(--border2);
-  border-right: 1px solid var(--border2);
+  height: 10px;
+  border-left: 1px solid rgba(0,0,0,0.2);
+  border-right: 1px solid rgba(0,0,0,0.2);
 }
-.sel-handle-anchor {
-  border: 1px solid rgba(59,130,246,0.7);
-  box-shadow: 0 1px 6px rgba(0,0,0,0.4);
+.sel-handle:hover {
+  background: #fff;
+  transform: translate(-50%, -50%) scale(1.1);
 }
-.sel-handle-end {
-  border: 1px solid rgba(148,163,184,0.5);
-  box-shadow: 0 1px 6px rgba(0,0,0,0.4);
+
+.sel-graph-marker {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 11;
 }
-.sel-handle:hover { background: var(--surface); }
 
 /* ── Per-chart selection lines ──────────────────────────── */
 .sel-line {
@@ -796,4 +858,10 @@ input  { font: inherit; }
   border-radius: 50%;
   border: 2px solid #333;
   box-shadow: 0 0 4px rgba(0,0,0,0.5);
+}
+
+.sel-marker-start, .sel-marker-end {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
 }

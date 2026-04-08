@@ -45,6 +45,7 @@ document.addEventListener('click', e => {
   // Init sub-systems
   MapView.init(selectTrack, onMapMove, onMapPointClick);
   ChartView.init(onChartCursorMove, onChartRangeChange, onChartClick);
+  ChartView.setMapColorChangeCb(onMapColorChange);
 
   // Restore basemap
   if (urlState.basemap) {
@@ -150,13 +151,33 @@ document.addEventListener('click', e => {
     ChartView.cancelSelection();
   });
 
-  // File drag/drop
+  // Stats panel toggle
+  const btnStats = document.getElementById('btn-stats-panel');
+  btnStats.addEventListener('click', () => {
+    ChartView.toggleStats();
+    btnStats.classList.toggle('active');
+  });
+
+  // File drag/drop + click to browse
   initDropZone();
 
-  // File browse
-  document.getElementById('file-input').addEventListener('change', e => {
+  const fileInput   = document.getElementById('file-input');
+  const folderInput = document.getElementById('folder-input');
+
+  const onInputChange = e => {
     handleFiles(Array.from(e.target.files));
     e.target.value = '';
+  };
+  fileInput.addEventListener('change', onInputChange);
+  folderInput.addEventListener('change', onInputChange);
+
+  document.getElementById('browse-files-btn').addEventListener('click', e => {
+    e.stopPropagation();
+    fileInput.click();
+  });
+  document.getElementById('browse-folder-btn').addEventListener('click', e => {
+    e.stopPropagation();
+    folderInput.click();
   });
 
   // Keyboard shortcuts
@@ -169,6 +190,40 @@ document.addEventListener('click', e => {
 })();
 
 // ── Drag & Drop ───────────────────────────────────────────────────
+function readDirEntries(reader) {
+  return new Promise((resolve, reject) => {
+    const results = [];
+    const readBatch = () => reader.readEntries(batch => {
+      if (!batch.length) { resolve(results); return; }
+      results.push(...batch);
+      readBatch();
+    }, reject);
+    readBatch();
+  });
+}
+
+async function collectEntry(entry) {
+  if (entry.isFile) {
+    return new Promise((resolve, reject) => entry.file(resolve, reject));
+  }
+  const reader = entry.createReader();
+  const entries = await readDirEntries(reader);
+  const results = await Promise.allSettled(entries.map(collectEntry));
+  return results.flatMap(r => r.status === 'fulfilled' ? [r.value].flat() : []);
+}
+
+async function collectDroppedFiles(dataTransfer) {
+  // entries must be captured synchronously before the event is released
+  const entries = Array.from(dataTransfer.items || [])
+    .map(i => i.webkitGetAsEntry?.())
+    .filter(Boolean);
+  if (entries.length) {
+    const results = await Promise.allSettled(entries.map(collectEntry));
+    return results.flatMap(r => r.status === 'fulfilled' ? [r.value].flat() : []);
+  }
+  return Array.from(dataTransfer.files);
+}
+
 function initDropZone() {
   const zone = document.getElementById('drop-zone');
 
@@ -182,10 +237,10 @@ function initDropZone() {
     document.body.addEventListener(ev, () => zone.classList.remove('drag-over'));
   });
 
-  const onDrop = e => {
+  const onDrop = async e => {
     e.preventDefault();
     zone.classList.remove('drag-over');
-    const files = Array.from(e.dataTransfer.files);
+    const files = await collectDroppedFiles(e.dataTransfer);
     handleFiles(files);
   };
   zone.addEventListener('drop', onDrop);
@@ -194,7 +249,8 @@ function initDropZone() {
 
 // ── File loading ──────────────────────────────────────────────────
 async function handleFiles(files) {
-  const valid = files.filter(f => /\.(gpx|fit|tcx|kml)$/i.test(f.name));
+  const existingFilenames = new Set(Object.values(tracks).map(t => t.filename));
+  const valid = files.filter(f => /\.(gpx|fit|tcx|kml)$/i.test(f.name) && !existingFilenames.has(f.name));
   if (!valid.length) {
     showToast('No supported files found (GPX, FIT, TCX, KML)', 'error');
     return;
@@ -569,6 +625,11 @@ function onMapPointClick(trackId, ptIdx) {
 
 function onMapMove(lat, lng, zoom) {
   UrlState.patch({ map: [+lat.toFixed(5), +lng.toFixed(5), zoom] });
+}
+
+function onMapColorChange(data) {
+  if (!data) { MapView.clearMetricColor(); return; }
+  MapView.colorTrackByMetric(selectedId, data.pts, data.colors);
 }
 
 // ── Resize handle ─────────────────────────────────────────────────

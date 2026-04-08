@@ -13,8 +13,11 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css">
   <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
 
-  <!-- EasyFit (FIT file parser) -->
-  <script src="https://cdn.jsdelivr.net/npm/easy-fit@1.4.0/dist/easy-fit.js"></script>
+  <!-- FIT file parser -->
+  <script type="module">
+    import FitParser from 'https://esm.sh/fit-file-parser@2.3.3';
+    window.EasyFit = FitParser;
+  </script>
 
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -33,14 +36,16 @@
         </div>
       </div>
 
+      <input type="file" id="file-input" multiple accept=".gpx,.fit,.tcx,.kml" hidden>
+      <input type="file" id="folder-input" webkitdirectory multiple hidden>
       <div id="drop-zone" class="drop-idle">
         <div class="drop-icon material-symbols-rounded">download</div>
-        <div class="drop-primary">Drop GPS files here</div>
+        <div class="drop-primary">Drop files or folders here</div>
         <div class="drop-formats">GPX · FIT · TCX · KML</div>
-        <label class="drop-browse">
-          or browse
-          <input type="file" id="file-input" multiple accept=".gpx,.fit,.tcx,.kml" hidden>
-        </label>
+        <div class="drop-actions">
+          <button class="drop-btn" id="browse-files-btn">Files</button>
+          <button class="drop-btn" id="browse-folder-btn">Folder</button>
+        </div>
       </div>
 
       <div id="track-list-header">
@@ -67,6 +72,7 @@
           <div id="basemap-switcher">
             <button class="bm-btn active" data-layer="swisstopo">Swisstopo</button>
             <button class="bm-btn" data-layer="swisstopo-gray">Topo Gray</button>
+            <button class="bm-btn" data-layer="opentopomap">Topo</button>
             <button class="bm-btn" data-layer="osm">OSM</button>
             <button class="bm-btn" data-layer="satellite">Satellite</button>
           </div>
@@ -90,11 +96,12 @@
         <div id="tab-graphs" class="tab-content active">
           <div id="chart-toolbar">
             <div id="metric-pills">
-              <button class="metric-pill active" data-metric="elevation" style="--pill-color:#4ECDC4">Elevation</button>
-              <button class="metric-pill active" data-metric="speed"     style="--pill-color:#45B7D1">Speed</button>
-              <button class="metric-pill"        data-metric="power"     style="--pill-color:#F7DC6F">Power</button>
-              <button class="metric-pill"        data-metric="hr"        style="--pill-color:#FF6B6B">Heart Rate</button>
-              <button class="metric-pill"        data-metric="cadence"   style="--pill-color:#BB8FCE">Cadence</button>
+              <button class="metric-pill active" data-metric="elevation"   style="--pill-color:#4ECDC4">Elevation</button>
+              <button class="metric-pill active" data-metric="speed"       style="--pill-color:#45B7D1">Speed</button>
+              <button class="metric-pill"        data-metric="gradient"    style="--pill-color:#A8C8A0">Gradient</button>
+              <button class="metric-pill"        data-metric="power"       style="--pill-color:#F7DC6F">Power</button>
+              <button class="metric-pill"        data-metric="hr"          style="--pill-color:#FF6B6B">Heart Rate</button>
+              <button class="metric-pill"        data-metric="cadence"     style="--pill-color:#BB8FCE">Cadence</button>
               <button class="metric-pill"        data-metric="temperature" style="--pill-color:#F8C471">Temp</button>
             </div>
             <div id="chart-options">
@@ -104,6 +111,7 @@
               </div>
               <button id="btn-reset-selection" class="icon-btn" title="Cancel selection"><span class="material-symbols-rounded">fit_width</span></button>
               <button id="btn-reset-zoom" class="icon-btn" title="Reset zoom"><span class="material-symbols-rounded">refresh</span></button>
+              <button id="btn-stats-panel" class="icon-btn active" title="Toggle statistics"><span class="material-symbols-rounded">bar_chart</span></button>
             </div>
           </div>
 
@@ -146,6 +154,8 @@
     </div>
   </div>
 
+  <div id="hist-tooltip"></div>
+  <div id="hist-line"></div>
   <div id="toast-container"></div>
 
   <script src="js/storage.js"></script>
