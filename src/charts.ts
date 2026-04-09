@@ -783,7 +783,7 @@ export const ChartView = (() => {
     // Smoothing toggle
     const smoothBtn = document.createElement('button');
     smoothBtn.className = 'icon-btn mini smooth-btn' + (smoothedMetrics.has(metricKey) ? ' active' : '');
-    smoothBtn.title = 'Toggle data smoothing (Gaussian)';
+    smoothBtn.title = 'Toggle data smoothing';
     smoothBtn.innerHTML = `<span class="material-symbols-rounded">${smoothedMetrics.has(metricKey) ? 'blur_on' : 'blur_off'}</span>`;
     smoothBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1000,7 +1000,9 @@ export const ChartView = (() => {
         draw: [
           // 1. (bottom) Color / metric color of the selected track
           (u: uPlot) => {
-            if (metricKey === 'elevation') {
+            if (metricKey === 'gears') {
+              drawTrackPath(u, xData as number[], yData as number[], def.color, 1.5, metricKey, null, pts);
+            } else if (metricKey === 'elevation') {
               drawElevationGradient(u, xData as number[], yData as number[], gradData);
             } else if (metricKey === 'gradient') {
               drawGradientChart(u, xData as number[], yData as number[]);
@@ -1008,7 +1010,7 @@ export const ChartView = (() => {
               drawMetricColorFill(u, xData as number[], yData as number[], pts, metricKey);
             } else {
               // Normal colored line
-              drawTrackPath(u, xData as number[], yData as number[], def.color, 2, metricKey);
+               drawTrackPath(u, xData as number[], yData as number[], def.color, 1.5, metricKey, null, pts);
             }
           },
 
@@ -2148,6 +2150,14 @@ export const ChartView = (() => {
       content = `${pts[idx].gearRearTooth}T <span style="font-size:10px; opacity:0.6; margin-left:4px">(pos ${yData[idx]})</span>`;
     } else if (metricKey === 'gearFront' && pts[idx].gearFrontTooth != null) {
       content = `${pts[idx].gearFrontTooth}T <span style="font-size:10px; opacity:0.6; margin-left:4px">(pos ${yData[idx]})</span>`;
+    } else if (metricKey === 'gears') {
+      const p = pts[idx];
+      const front = p.gearFrontTooth != null ? `${p.gearFrontTooth}T` : (p.gearFront != null ? `pos ${p.gearFront}` : '');
+      const rear = p.gearRearTooth != null ? `${p.gearRearTooth}T` : (p.gearRear != null ? `pos ${p.gearRear}` : '');
+      
+      if (front || rear) {
+        content += ` <span style="font-size:10px; opacity:0.6; margin-left:4px">(${front} / ${rear})</span>`;
+      }
     }
 
     if (el.innerHTML !== content) el.innerHTML = content;
@@ -2194,8 +2204,8 @@ export const ChartView = (() => {
       ctx.beginPath();
       ctx.moveTo(x0, y0);
       ctx.lineTo(x1, y1);
-      ctx.strokeStyle = gradientColor(g);
-      ctx.lineWidth = 2 * dpr;
+      ctx.strokeStyle = hexToRgba(gradientColor(g), 0.8);
+      ctx.lineWidth = 1.5 * dpr;
       ctx.stroke();
     }
 
@@ -2225,8 +2235,8 @@ export const ChartView = (() => {
       ctx.beginPath();
       ctx.moveTo(x0, y0);
       ctx.lineTo(x1, y1);
-      ctx.strokeStyle = gradientColor(g);
-      ctx.lineWidth = 2 * dpr;
+      ctx.strokeStyle = hexToRgba(gradientColor(g), 0.8);
+      ctx.lineWidth = 1.5 * dpr;
       ctx.stroke();
     }
 
@@ -2567,7 +2577,7 @@ export const ChartView = (() => {
   function gradientColor(g: number | null) {
     if (g == null) return '#888896';
     const absG = Math.abs(g);
-    const t = Math.min(1, absG / 15);
+    const t = Math.min(1, absG / 8);
     if (g > 0) return lerpHex('#A8C8A0', '#d73027', t); // Green to Red
     return lerpHex('#A8C8A0', '#4575b4', t); // Green to Blue
   }
@@ -2846,6 +2856,9 @@ export const ChartView = (() => {
     ctx.restore();
   }
 
+
+
+
   function drawTrackPath(
     u: uPlot,
     xData: (number | null)[],
@@ -2854,6 +2867,7 @@ export const ChartView = (() => {
     width: number,
     metricKey: string,
     range: [number, number] | null = null,
+    pts: TrackPoint[] = [],
   ) {
     const ctx = u.ctx;
     const bb = u.bbox;
@@ -2866,13 +2880,24 @@ export const ChartView = (() => {
     ctx.clip();
 
     ctx.beginPath();
-    ctx.strokeStyle = color;
+    ctx.strokeStyle = hexToRgba(color, 0.8);
     ctx.lineWidth = width * dpr;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
 
     const isStepped = metricKey === 'gearRear' || metricKey === 'gearFront';
     let first = true;
+    let lastFrontGear: number | null = null;
+    let fMin = 1;
+    let fMax = 1;
+    
+    if (metricKey === 'gears' && pts.length > 0) {
+      const frontGears = pts.map(p => p.gearFrontTooth ?? p.gearFront).filter((v): v is number => v != null);
+      if (frontGears.length > 0) {
+        fMin = Math.min(...frontGears);
+        fMax = Math.max(...frontGears);
+      }
+    }
 
     for (let i = 0; i < xData.length; i++) {
       const xv = xData[i];
@@ -2880,6 +2905,33 @@ export const ChartView = (() => {
       if (xv == null || yv == null) {
         first = true;
         continue;
+      }
+
+      if (metricKey === 'gears' && pts[i]) {
+        const fg = pts[i].gearFrontTooth ?? pts[i].gearFront;
+        if (fg != null && fg !== lastFrontGear) {
+          if (!first && i > 0) {
+            ctx.stroke();
+            ctx.beginPath();
+            const prevX = u.valToPos(xData[i-1]!, 'x', true);
+            const prevY = u.valToPos(yData[i-1]!, 'y', true);
+            ctx.moveTo(prevX, prevY);
+          }
+          
+          // Compute color
+          let segmentColor = color;
+          if (fMax !== fMin && fg != null) {
+            if (fg === fMin) {
+              segmentColor = '#FFC400'; // Small ring: Yellow-Orange
+            } else if (fg === fMax) {
+              segmentColor = '#FF8C00'; // Big ring: Dark Orange
+            } else {
+              segmentColor = '#FFA500'; // Middle ring: Orange
+            }
+          }
+          ctx.strokeStyle = hexToRgba(segmentColor, 0.8);
+          lastFrontGear = fg;
+        }
       }
 
       // Check gap

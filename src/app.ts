@@ -149,6 +149,13 @@ function showMetricMenu(anchorEl: HTMLElement) {
       const isNowActive = ChartView.getActiveMetrics().has(key);
       item.classList.toggle('active', isNowActive);
       item.querySelector('.check')!.textContent = isNowActive ? 'check' : '';
+      
+      const pill = document.querySelector(`#metric-pills .metric-pill[data-metric="${key}"]`);
+      if (pill) {
+        pill.classList.toggle('active', isNowActive);
+      }
+      updateToolbarLayout();
+      
       syncMetricsToUrl();
     });
     popup.appendChild(item);
@@ -1437,10 +1444,29 @@ function updateToolbarLayout() {
   let hidden = false;
 
   Array.from(pills.children).forEach((el) => {
-    totalW += (el as HTMLElement).offsetWidth + 6;
-    if (totalW > availableW) hidden = true;
+    const htmlEl = el as HTMLElement;
+    if (htmlEl.id === 'pill-overflow') return;
+    if (!htmlEl.classList.contains('active')) return;
+
+    const isOverflow = htmlEl.classList.contains('overflow-hidden');
+    if (isOverflow) {
+      htmlEl.classList.remove('overflow-hidden');
+    }
+
+    totalW += htmlEl.offsetWidth + 6;
+
+    if (totalW > availableW) {
+      hidden = true;
+      htmlEl.classList.add('overflow-hidden');
+    } else {
+      htmlEl.classList.remove('overflow-hidden');
+    }
   });
 
+  const overflowEl = document.getElementById('pill-overflow');
+  if (overflowEl) {
+    overflowEl.classList.toggle('hidden', !hidden);
+  }
   if (hidden) {
     toolbar.classList.add('collapsed');
   }

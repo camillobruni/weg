@@ -228,10 +228,21 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
                 else if (st.includes('antplus') || st.includes('ant_plus')) sourceIcon = 'settings_input_antenna';
                 else if (st.includes('bluetooth')) sourceIcon = 'bluetooth';
 
+                let deviceIcon = 'sensors';
+                const nameLower = name.toLowerCase();
+                if (nameLower.includes('heartrate') || nameLower.includes('hrm')) deviceIcon = 'favorite';
+                else if (nameLower.includes('power')) deviceIcon = 'bolt';
+                else if (nameLower.includes('speed')) deviceIcon = 'speed';
+                else if (nameLower.includes('cadence')) deviceIcon = 'directions_bike';
+                else if (nameLower.includes('barometer')) deviceIcon = 'air';
+                else if (nameLower.includes('temperature')) deviceIcon = 'device_thermostat';
+                else if (nameLower.includes('gps')) deviceIcon = 'location_on';
+
                 return `
                 <div class="details-card" style="padding: 10px">
                   <div style="display:flex; justify-content:space-between; align-items:baseline">
                     <div style="display:flex; align-items:center; gap:6px">
+                      <span class="material-symbols-rounded" style="font-size:16px; color:var(--text-dim)">${deviceIcon}</span>
                       <div style="font-size:13px; font-weight:700; color:var(--text)">${escHtml(name)}</div>
                       ${sourceIcon ? `<span class="material-symbols-rounded" style="font-size:14px; color:var(--text-dim)" title="${d.sourceType}">${sourceIcon}</span>` : ''}
                     </div>

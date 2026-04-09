@@ -207,11 +207,6 @@
 
         <div id="tab-graphs" class="tab-content active">
           <div id="chart-toolbar">
-            <button id="btn-metric-menu" class="icon-btn" title="Select metrics to display">
-              <span class="material-symbols-rounded">bar_chart</span>
-              <span class="btn-label">Graphs</span>
-              <span class="material-symbols-rounded">expand_more</span>
-            </button>
             <div id="metric-pills">
               <button class="metric-pill active" data-metric="elevation" style="--pill-color:#4ECDC4" title="Toggle Elevation graph" draggable="true">
                 <span class="material-symbols-rounded">height</span>Elevation
@@ -246,7 +241,13 @@
               <button class="metric-pill"        data-metric="gears"       style="--pill-color:#FF8C00" title="Toggle Gears graph" draggable="true">
                 <span class="material-symbols-rounded">settings</span>Gears
               </button>
+              <span id="pill-overflow" class="hidden">...</span>
             </div>
+            <button id="btn-metric-menu" class="sort-select-btn" title="Select metrics to display">
+              <span class="material-symbols-rounded">bar_chart</span>
+              <span class="btn-label">Graphs</span>
+              <span class="material-symbols-rounded">expand_more</span>
+            </button>
             <div id="chart-options">
               <div id="x-axis-ctrl" class="seg-ctrl">
                 <button class="seg-btn" data-axis="distance" title="Switch X-axis to Distance"><span class="material-symbols-rounded">route</span>Distance</button>

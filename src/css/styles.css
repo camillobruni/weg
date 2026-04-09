@@ -368,6 +368,8 @@ button {
   padding: 4px 8px;
   border-radius: 6px;
   flex: 1;
+  height: 24px;
+  box-sizing: border-box;
   font-size: 11px;
   color: var(--text-muted);
   transition: all 0.1s;
@@ -943,18 +945,7 @@ body.dragging-sidebar {
 }
 
 #btn-metric-menu {
-  display: none;
-  width: auto;
-  padding: 0 8px;
-  gap: 4px;
-  font-weight: 600;
-  font-size: 11px;
-}
-#chart-toolbar.collapsed #btn-metric-menu {
-  display: flex;
-}
-#btn-metric-menu .material-symbols-rounded {
-  font-size: var(--is-s);
+  flex: 0 0 auto;
 }
 
 #metric-pills {
@@ -963,8 +954,17 @@ body.dragging-sidebar {
   flex: 1;
   overflow: hidden;
 }
-#chart-toolbar.collapsed #metric-pills {
+.metric-pill:not(.active) {
   display: none;
+}
+.metric-pill.overflow-hidden {
+  display: none !important;
+}
+#pill-overflow {
+  color: var(--text-muted);
+  font-weight: bold;
+  padding: 0 4px;
+  align-self: flex-end;
 }
 .metric-pill {
   height: 24px;
@@ -995,11 +995,6 @@ body.dragging-sidebar {
   cursor: default;
 }
 
-/* Collapsed toolbar state */
-#chart-toolbar.collapsed #metric-pills {
-  display: none;
-}
-
 #chart-options {
   display: flex;
   align-items: center;
@@ -1013,18 +1008,21 @@ body.dragging-sidebar {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 2px;
+  height: 24px;
+  box-sizing: border-box;
 }
 .seg-btn {
   background: transparent;
   border: none;
   color: var(--text-dim);
-  padding: 2px 8px;
+  padding: 0 8px;
   font-size: var(--fs-s);
   font-weight: 700;
   border-radius: 4px;
   display: flex;
   align-items: center;
   gap: 6px;
+  height: 100%;
 }
 .seg-btn .material-symbols-rounded {
   font-size: 12px;
