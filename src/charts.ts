@@ -1291,7 +1291,7 @@ export const ChartView = (() => {
 
     // Floating pinned y-value
     const pinYVal = document.createElement('div');
-    pinYVal.className = 'cur-y-val';
+    pinYVal.className = 'cur-y-val pin';
     pinYVal.style.cssText = `color:${def.color};display:none`;
 
     overlay.append(
