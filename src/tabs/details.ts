@@ -6,7 +6,7 @@
 
 import { TrackData } from '../parsers';
 import { Storage } from '../storage';
-import { fmtSecs, escHtml, fmtDateTime, getTagColor } from '../utils';
+import { fmtSecs, escHtml, fmtDateTime, getTagColor, fmtFileSize } from '../utils';
 
 let onTagsChangeCb: () => void = () => {};
 export function initDetails(onTagsChange: () => void) {
@@ -81,8 +81,16 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
             <div class="details-card-value" style="font-size:13px; word-break:break-all">${escHtml(track.fileName || '—')}</div>
           </div>
           <div class="details-card" style="padding: 12px">
+            <div class="details-card-label" style="font-size:10px">File Size</div>
+            <div class="details-card-value" style="font-size:16px">${track.fileSize ? fmtFileSize(track.fileSize) : '—'}</div>
+          </div>
+          <div class="details-card" style="padding: 12px">
             <div class="details-card-label" style="font-size:10px">Format</div>
             <div class="details-card-value" style="font-size:16px">${track.format.toUpperCase()}</div>
+          </div>
+          <div class="details-card" style="padding: 12px">
+            <div class="details-card-label" style="font-size:10px">Sport</div>
+            <div class="details-card-value" style="font-size:16px">${escHtml(track.sport || '—')} ${track.subSport ? `<span style="font-size:12px; color:var(--text-dim)">(${escHtml(track.subSport)})</span>` : ''}</div>
           </div>
           <div class="details-card" style="padding: 12px">
             <div class="details-card-label" style="font-size:10px">Device / Creator</div>
@@ -215,7 +223,7 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
                   .join(' • ');
 
                 let sourceIcon = '';
-                const st = (d.sourceType || '').toLowerCase();
+                const st = String(d.sourceType || '').toLowerCase();
                 if (st.includes('local')) sourceIcon = 'memory';
                 else if (st.includes('antplus') || st.includes('ant_plus')) sourceIcon = 'settings_input_antenna';
                 else if (st.includes('bluetooth')) sourceIcon = 'bluetooth';

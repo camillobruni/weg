@@ -50,13 +50,10 @@ export const MapView = (() => {
 
   // Tile layers
   const LAYERS: Record<string, L.TileLayer> = {
-    swisstopo: L.tileLayer(
-      'https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-farbe/default/current/3857/{z}/{x}/{y}.jpeg',
-      {
-        attribution: '&copy; swisstopo',
-        maxZoom: 18,
-      },
-    ),
+    swisstopo: L.tileLayer('https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-farbe/default/current/3857/{z}/{x}/{y}.jpeg', {
+      attribution: '&copy; swisstopo',
+      maxZoom: 18,
+    }),
     opentopomap: L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenTopoMap contributors',
       maxZoom: 17,
@@ -77,10 +74,15 @@ export const MapView = (() => {
       const resp = await fetch('./imagery.json');
       if (!resp.ok) return;
       const data = await resp.json();
-      // Filter out non-tms/bing/wms for now
-      imageryConfig = data.filter(
-        (s: ImagerySource) => (s.type === 'tms' || s.type === 'wms' || s.type === 'wmts' || s.type === 'bing') && !s.overlay,
-      );
+      // Filter out invalid layers or overlays
+      imageryConfig = data.filter((s: ImagerySource) => {
+        if (s.overlay) return false;
+        if (s.type === 'tms' || s.type === 'wmts') {
+          // Ensure we have a valid tile template
+          return s.url.includes('{z}') || s.url.includes('{x}') || s.url.includes('{y}');
+        }
+        return s.type === 'wms' || s.type === 'bing';
+      });
       updateExtraLayersMenu();
     } catch (e) {
       console.error('MapView: Failed to fetch imagery config', e);
@@ -200,14 +202,19 @@ export const MapView = (() => {
 
     let layer: L.TileLayer;
 
+    const hasBBox = url.includes('{bbox}');
+    const hasWidth = url.includes('{width}');
+    const hasProj = url.includes('{proj}');
+
+    // Normalize iD placeholders to something we can handle or just use as is if it's a template
+    url = url.replace(/{proj}/g, 'EPSG:3857')
+             .replace(/{width}/g, '256')
+             .replace(/{height}/g, '256')
+             .replace(/{zoom}/g, '{z}')
+             .replace(/{bbox}/g, '{bbox}');
+
     // Handle WMS / WMTS or custom templates
-    if (s.type === 'wms' || url.includes('{bbox}') || url.includes('{width}') || url.includes('{proj}')) {
-      // Normalize iD placeholders to something we can handle or just use as is if it's a template
-      url = url.replace('{proj}', 'EPSG:3857')
-               .replace('{width}', '256')
-               .replace('{height}', '256')
-               .replace('{zoom}', '{z}')
-               .replace('{bbox}', '{bbox}');
+    if (s.type === 'wms' || hasBBox || hasWidth || hasProj) {
 
       // Basic heuristic: if it's WMS but doesn't have a full template, try L.tileLayer.wms
       if (s.type === 'wms' && !url.includes('{bbox}')) {
@@ -236,12 +243,16 @@ export const MapView = (() => {
     Object.values(extraLayers).forEach((l) => map.removeLayer(l));
 
     extraLayers[s.id] = layer;
+    let errorLogged = false;
     layer.on('tileerror', (e) => {
-      console.error(`MapView: Tile error for layer ${s.id}`, e);
+      if (!errorLogged) {
+        console.warn(`MapView: Tile error for layer ${s.id} (suppressing further errors)`, e);
+        errorLogged = true;
+      }
     });
     map.addLayer(layer);
 
-    const activeLabel = document.getElementById('active-extra-map');
+    const activeLabel = document.getElementById('selected-extra-map');
     if (activeLabel) {
       activeLabel.textContent = s.name;
       activeLabel.classList.remove('hidden');
@@ -372,7 +383,7 @@ export const MapView = (() => {
     Object.values(extraLayers).forEach((l) => map.removeLayer(l));
     map.addLayer(LAYERS[key]);
 
-    const activeLabel = document.getElementById('active-extra-map');
+    const activeLabel = document.getElementById('selected-extra-map');
     if (activeLabel) {
       activeLabel.classList.add('hidden');
       activeLabel.textContent = '';

@@ -8,7 +8,7 @@ import uPlot from 'uplot';
 import { TrackData, Parsers } from '../parsers';
 import { Storage } from '../storage';
 import { MapView } from '../map';
-import { Zones } from '../zones';
+import { Zones } from '../zones.ts';
 import { ChartView } from '../charts';
 import { UrlState } from '../url-state';
 import { fmtSecs, escHtml, fmtDuration } from '../utils';

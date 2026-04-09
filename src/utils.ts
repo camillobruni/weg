@@ -63,6 +63,14 @@ export function fmtDateTime(ts: number | string | Date): string {
   return iso.split('T')[0] + ' ' + iso.split('T')[1].slice(0, 5);
 }
 
+export function fmtFileSize(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
 export function escHtml(str: string): string {
   const p = document.createElement('p');
   p.textContent = str;

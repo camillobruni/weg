@@ -13,6 +13,7 @@ import { MapView } from './map';
 import { ChartView } from './charts';
 import { renderDetails, initDetails } from './tabs/details';
 import { renderInsights, initInsights } from './tabs/insights';
+import { renderCombined, initCombined, resizeCombined } from './tabs/combined';
 import { fmtSecs, escHtml, fmtDate, getTagColor, compactId, shortRandom } from './utils';
 
 const TRACK_COLORS: string[] = [
@@ -30,6 +31,7 @@ const TRACK_COLORS: string[] = [
 const POINT_ZOOM_LEVEL = 16;
 
 let tracks: Record<string, TrackData> = {};
+let cancelProcessing = false;
 let selectedId: string | null = null;
 let colorIdx = 0;
 let followDot = false;
@@ -46,6 +48,7 @@ interface Filters {
   dur: [number | null, number | null];
   metrics: Set<string>;
   tags: string[];
+  sport: string | null;
 }
 
 let filters: Filters = {
@@ -54,6 +57,7 @@ let filters: Filters = {
   dur: [null, null],
   metrics: new Set<string>(),
   tags: [],
+  sport: null,
 };
 
 function syncFiltersToUrl() {
@@ -193,6 +197,10 @@ document.addEventListener('click', (e) => {
     renderInsights(tracks[selectedId]);
   }
 
+  if (btn.dataset.tab === 'combined' && selectedId && tracks[selectedId]) {
+    renderCombined(tracks[selectedId]);
+  }
+
   if (btn.dataset.tab === 'graphs') {
     ChartView.resize();
     updateToolbarLayout();
@@ -211,12 +219,12 @@ async function init() {
   const loaderText = document.getElementById('loader-text');
   const loaderSubtext = document.getElementById('loader-subtext');
   const progressBar = document.getElementById('loader-progress-bar') as HTMLElement;
+  const mapLoader = document.getElementById('map-loader');
+  const mapLoaderSpan = mapLoader?.querySelector('span');
 
-  if (loader) {
-    if (loaderText) loaderText.textContent = 'Loading database...';
-    if (loaderSubtext) loaderSubtext.textContent = '';
-    if (progressBar) progressBar.style.width = '0%';
-    loader.classList.remove('hidden');
+  if (mapLoader) {
+    if (mapLoaderSpan) mapLoaderSpan.textContent = 'Loading database...';
+    mapLoader.classList.remove('hidden');
   }
 
   const urlState = UrlState.get();
@@ -226,6 +234,7 @@ async function init() {
     applyFilters();
     syncFiltersToUrl();
   });
+  initCombined();
 
   // Init sub-systems
   MapView.init(
@@ -331,7 +340,12 @@ async function init() {
     const saved = await Storage.getAll();
     saved.sort((a, b) => a.addedAt - b.addedAt);
 
-    if (loaderText) loaderText.textContent = `Preparing ${saved.length} tracks...`;
+    if (mapLoaderSpan) mapLoaderSpan.textContent = `Preparing ${saved.length} tracks...`;
+
+    saved.forEach(t => {
+      tracks[t.id] = t;
+    });
+    applyFilters();
 
     const restoreId = urlState.track && saved.find(t => t.id === urlState.track) 
       ? urlState.track 
@@ -362,12 +376,15 @@ async function init() {
       }
     }
 
-    // Hide global loader early so user can start interacting
-    if (loader) loader.classList.add('hidden');
+    // Hide database loader
+    if (mapLoader) mapLoader.classList.add('hidden');
 
     // 2. Load the rest in background chunks
     if (saved.length > (selectedTrackData ? 1 : 0)) {
-      if (mapLoader) mapLoader.classList.remove('hidden');
+      if (mapLoader) {
+        if (mapLoaderSpan) mapLoaderSpan.textContent = 'Loading tracks...';
+        mapLoader.classList.remove('hidden');
+      }
       
       const remaining = saved.filter(t => t.id !== restoreId);
       let index = 0;
@@ -535,6 +552,40 @@ async function init() {
     .getElementById('filter-dur-max')
     ?.addEventListener('input', (e) => onFilterInput('dur', 1, e));
 
+  const burgerBtn = document.getElementById('sport-burger-btn');
+  const dropdownContent = document.getElementById('sport-dropdown-content');
+  burgerBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (dropdownContent) {
+      const isVisible = dropdownContent.style.display === 'block';
+      dropdownContent.style.display = isVisible ? 'none' : 'block';
+    }
+  });
+  
+  document.addEventListener('click', (e) => {
+    if (dropdownContent && dropdownContent.style.display === 'block') {
+      if (!dropdownContent.contains(e.target as Node) && e.target !== burgerBtn) {
+        dropdownContent.style.display = 'none';
+      }
+    }
+  });
+
+  document.getElementById('sport-filter-container')?.addEventListener('click', (e) => {
+    const target = e.target as HTMLElement;
+    const btn = target.closest('[data-sport]');
+    if (btn) {
+      const selectedSport = (btn as HTMLElement).dataset.sport || null;
+      filters.sport = filters.sport === selectedSport ? null : selectedSport;
+      applyFilters();
+      syncFiltersToUrl();
+      updateFilterUI();
+      
+      if (target.closest('.dropdown-item')) {
+        if (dropdownContent) dropdownContent.style.display = 'none';
+      }
+    }
+  });
+
   document.getElementById('filter-metrics')?.addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest('.mini-pill') as HTMLElement;
     if (!btn) return;
@@ -547,7 +598,7 @@ async function init() {
   });
 
   document.getElementById('btn-reset-filters')?.addEventListener('click', () => {
-    filters = { date: [null, null], dist: [null, null], dur: [null, null], metrics: new Set(), tags: [] };
+    filters = { date: [null, null], dist: [null, null], dur: [null, null], metrics: new Set(), tags: [], sport: null };
     updateFilterUI();
     applyFilters();
     syncFiltersToUrl();
@@ -575,6 +626,7 @@ async function init() {
   // Resize charts when window changes
   window.addEventListener('resize', () => {
     ChartView.resize();
+    resizeCombined();
     MapView.invalidateSize?.();
     updateToolbarLayout();
   });
@@ -602,6 +654,7 @@ async function processAndLoadTrack(t: TrackData) {
   tracks[t.id] = t;
   colorIdx = Math.max(colorIdx, TRACK_COLORS.indexOf(t.color) + 1);
   MapView.addTrack(t);
+  MapView.setTrackVisible(t.id, t.visible && !t._filtered);
   renderTrackList(); // Progressive list update
 }
 
@@ -623,6 +676,7 @@ function initResizeHandle() {
     const clampedH = Math.max(100, Math.min(window.innerHeight - 100, h));
     panel.style.height = `${clampedH}px`;
     ChartView.resize();
+    resizeCombined();
     MapView.invalidateSize?.();
   });
 
@@ -767,6 +821,7 @@ function selectTrack(id: string, fit = true) {
   const activeTab = activeTabBtn ? activeTabBtn.dataset.tab : 'graphs';
   if (activeTab === 'details') renderDetails(tracks[id], getGlobalTags());
   if (activeTab === 'insights') renderInsights(tracks[id]);
+  if (activeTab === 'combined') renderCombined(tracks[id]);
 
   // Tell sub-views
   MapView.setSelectedTrack(id, fit);
@@ -834,7 +889,10 @@ async function clearAll() {
     if (input.value !== code) return;
     close();
     
+    cancelProcessing = true;
     await Storage.clear();
+    localStorage.clear();
+    
     tracks = {};
     selectedId = null;
     MapView.clearHighlight();
@@ -895,6 +953,11 @@ function applyFilters() {
       }
     }
 
+    // Sport filter
+    if (visible && filters.sport) {
+      if (t.sport !== filters.sport) visible = false;
+    }
+
     // Tags filter
     if (visible && filters.tags.length > 0) {
       const trackTags = t.tags || [];
@@ -921,6 +984,11 @@ function updateFilterUI() {
     filters.dur[1] !== null ? String(filters.dur[1]) : '';
   (document.getElementById('filter-tags') as HTMLInputElement).value =
     filters.tags.join(', ');
+
+  document.querySelectorAll('#sport-filter-container .mini-pill, #sport-dropdown-content .dropdown-item').forEach((el) => {
+    const item = el as HTMLElement;
+    item.classList.toggle('active', (item.dataset.sport || '') === (filters.sport || ''));
+  });
 
   document.querySelectorAll('#filter-metrics .mini-pill').forEach((el) => {
     const btn = el as HTMLElement;
@@ -958,7 +1026,72 @@ function updateSearchSortUI() {
   }
 }
 
+function updateSportFilterOptions() {
+  const container = document.getElementById('sport-filter-container');
+  if (!container) return;
+  
+  const commonContainer = document.getElementById('common-sports');
+  const dropdownContent = document.getElementById('sport-dropdown-content');
+  if (!commonContainer || !dropdownContent) return;
+
+  const sports = new Set<string>();
+  Object.values(tracks).forEach(t => {
+    if (t.sport) sports.add(t.sport);
+  });
+
+  const sportsArray = Array.from(sports).sort();
+  const burgerDropdown = document.getElementById('sport-burger-dropdown');
+  
+  commonContainer.innerHTML = '';
+  dropdownContent.innerHTML = '';
+  
+  if (sportsArray.length <= 4) {
+    if (burgerDropdown) burgerDropdown.style.display = 'none';
+    
+    sportsArray.forEach(sport => {
+      const btn = document.createElement('button');
+      btn.className = 'mini-pill' + (filters.sport === sport ? ' active' : '');
+      btn.dataset.sport = sport;
+      btn.title = sport.charAt(0).toUpperCase() + sport.slice(1);
+      btn.innerHTML = `<span class="material-symbols-rounded">${getSportIcon(sport)}</span>`;
+      commonContainer.appendChild(btn);
+    });
+  } else {
+    if (burgerDropdown) burgerDropdown.style.display = 'inline-block';
+    
+    const commonSports = ['running', 'cycling', 'walking'];
+    
+    commonSports.forEach(sport => {
+      if (sports.has(sport)) {
+        const btn = document.createElement('button');
+        btn.className = 'mini-pill' + (filters.sport === sport ? ' active' : '');
+        btn.dataset.sport = sport;
+        btn.title = sport.charAt(0).toUpperCase() + sport.slice(1);
+        btn.innerHTML = `<span class="material-symbols-rounded">${getSportIcon(sport)}</span>`;
+        commonContainer.appendChild(btn);
+      }
+    });
+    
+    sportsArray.forEach(sport => {
+      const item = document.createElement('div');
+      item.className = 'dropdown-item' + (filters.sport === sport ? ' active' : '');
+      item.dataset.sport = sport;
+      item.style.padding = '8px';
+      item.style.cursor = 'pointer';
+      item.style.display = 'flex';
+      item.style.alignItems = 'center';
+      item.style.gap = '8px';
+      item.innerHTML = `
+        <span class="material-symbols-rounded">${getSportIcon(sport)}</span>
+        <span>${sport.charAt(0).toUpperCase() + sport.slice(1)}</span>
+      `;
+      dropdownContent.appendChild(item);
+    });
+  }
+}
+
 function renderTrackList() {
+  updateSportFilterOptions();
   const list = document.getElementById('track-list');
   const emptyEl = document.getElementById('track-list-empty') as HTMLElement;
   const headerLabel = document.querySelector('.section-label');
@@ -1021,6 +1154,17 @@ function getGlobalTags(): string[] {
   return Array.from(all).sort();
 }
 
+function getSportIcon(sport: string | null): string {
+  if (!sport) return 'category';
+  const s = sport.toLowerCase();
+  if (s.includes('run')) return 'directions_run';
+  if (s.includes('cycl') || s.includes('bike')) return 'directions_bike';
+  if (s.includes('walk')) return 'directions_walk';
+  if (s.includes('swim')) return 'pool';
+  if (s.includes('hik')) return 'hiking';
+  return 'sports';
+}
+
 function buildTrackItem(track: TrackData) {
   const item = document.createElement('div');
   item.className = 'track-item' + (track.id === selectedId ? ' selected' : '');
@@ -1045,6 +1189,7 @@ function buildTrackItem(track: TrackData) {
       <div class="track-meta">
         <span>${date}</span>
         <span>${(track.stats.totalDist / 1000).toFixed(1)} km</span>
+        ${track.sport ? `<span class="material-symbols-rounded sport-icon" title="${escHtml(track.sport)}">${getSportIcon(track.sport)}</span>` : ''}
         <span class="badge">${track.format.toUpperCase()}</span>
       </div>
       ${tagsHtml}
@@ -1153,6 +1298,7 @@ function initDropZone() {
 
 async function handleFiles(files: File[]) {
   if (!files.length) return;
+  cancelProcessing = false;
   
   const loader = document.getElementById('global-loader');
   const loaderText = document.getElementById('loader-text');
@@ -1183,6 +1329,7 @@ async function handleFiles(files: File[]) {
     }
 
     for (let i = 0; i < validFiles.length; i++) {
+      if (cancelProcessing) break;
       const f = validFiles[i];
       if (loaderSubtext) loaderSubtext.textContent = f.name;
       if (progressBar) progressBar.style.width = `${(i / validFiles.length) * 100}%`;

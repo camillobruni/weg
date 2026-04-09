@@ -7,7 +7,7 @@
 import uPlot from 'uplot';
 import { TrackPoint, TrackStats, TrackData } from './parsers';
 import { gaussianSmooth, fmtSecs, hexToRgba } from './utils';
-import { Zones } from './zones';
+import { Zones } from './zones.ts';
 
 // Augment uPlot to include our custom property
 interface WegPlot extends uPlot {
@@ -201,8 +201,8 @@ export const ChartView = (() => {
     },
     gearRear: {
       label: 'Rear Gear',
-      field: 'gearRear',
-      unit: '',
+      field: 'gearRearTooth',
+      unit: 'T',
       color: '#82E0AA',
       abbr: 'rgr',
       icon: 'settings',
@@ -211,13 +211,23 @@ export const ChartView = (() => {
     },
     gearFront: {
       label: 'Front Gear',
-      field: 'gearFront',
-      unit: '',
+      field: 'gearFrontTooth',
+      unit: 'T',
       color: '#A8C8A0',
       abbr: 'fgr',
       icon: 'settings_input_component',
       fmt: (v) => Math.round(v).toString(),
       fmtAxis: (v) => Math.round(v).toString(),
+    },
+    gears: {
+      label: 'Gears',
+      field: 'gears',
+      unit: '',
+      color: '#FF8C00',
+      abbr: 'gr',
+      icon: 'settings',
+      fmt: (v) => v.toFixed(2),
+      fmtAxis: (v) => v.toFixed(1),
     },
     battery: {
       label: 'Battery',
@@ -386,6 +396,10 @@ export const ChartView = (() => {
       activeMetrics.delete('battery');
       activeMetrics.delete('gearRear');
       activeMetrics.delete('gearFront');
+    }
+
+    if (availableMetrics.has('gears')) {
+      activeMetrics.add('gears');
     }
 
     // Sync the pill buttons in the toolbar
@@ -1709,7 +1723,7 @@ export const ChartView = (() => {
     for (let i = 0; i < BINS; i++) {
       if (!bins[i]) continue;
       const bw = (bins[i] / peak) * plotW;
-      const alpha = hasSel ? 0.15 : 0.3 + 0.6 * (bins[i] / peak);
+      const alpha = hasSel ? 0.15 : 0.6;
       ctx.fillStyle = hexToRgba(def.color, alpha);
       ctx.fillRect(pad.l, binY(i), bw, binH);
     }

@@ -114,18 +114,30 @@ button {
   backdrop-filter: blur(4px);
   z-index: 10000;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
+}
+
+.loader-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   gap: 16px;
   color: var(--text);
   font-weight: 700;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  max-width: 450px;
+  width: 90%;
 }
 
 #loader-subtext {
   font-size: 12px;
-  color: var(--text-dim);
-  margin-top: -10px;
+  color: var(--text-muted);
+  margin-top: -8px;
   font-weight: 400;
   max-width: 400px;
   white-space: nowrap;
@@ -290,7 +302,7 @@ button {
   gap: 0;
 }
 
-#track-controls {
+#track-controls, #sort-controls {
   padding: 8px 12px;
   display: flex;
   flex-direction: column;

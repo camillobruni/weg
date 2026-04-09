@@ -20,11 +20,13 @@
 <body>
   <div id="app">
     <div id="global-loader" class="hidden">
-      <div class="spinner"></div>
-      <div id="loader-text">Importing tracks...</div>
-      <div id="loader-subtext"></div>
-      <div id="loader-progress-wrap">
-        <div id="loader-progress-bar"></div>
+      <div class="loader-box">
+        <div class="spinner"></div>
+        <div id="loader-text">Importing tracks...</div>
+        <div id="loader-subtext"></div>
+        <div id="loader-progress-wrap">
+          <div id="loader-progress-bar"></div>
+        </div>
       </div>
     </div>
 
@@ -77,14 +79,6 @@
           <input type="text" id="track-search" placeholder="Search tracks...">
           <button id="btn-regex-toggle" class="icon-btn mini" title="Use Regular Expression">.*</button>
         </div>
-        <div class="sort-ctrl">
-          <label>Sort:</label>
-          <button id="btn-sort-menu" class="sort-select-btn">
-            <span id="sort-current-icon" class="material-symbols-rounded">calendar_today</span>
-            <span id="sort-current-label">Date</span>
-            <span class="material-symbols-rounded arrow">expand_more</span>
-          </button>
-        </div>
       </div>
 
       <div id="filter-panel" class="hidden">
@@ -113,6 +107,20 @@
           </div>
         </div>
         <div class="filter-group">
+          <label><span class="material-symbols-rounded">category</span>Sport</label>
+          <div class="filter-row" id="sport-filter-container" style="display:flex; gap:4px; align-items:center; flex-wrap:wrap;">
+            <div id="common-sports" style="display:flex; gap:4px;"></div>
+            <div class="dropdown" id="sport-burger-dropdown" style="position:relative; display:inline-block;">
+              <button class="mini-pill" id="sport-burger-btn" title="More sports">
+                <span class="material-symbols-rounded">menu</span>
+              </button>
+              <div class="dropdown-content" id="sport-dropdown-content" style="display:none; position:absolute; background-color:var(--surface); min-width:160px; box-shadow:0px 8px 16px 0px rgba(0,0,0,0.2); z-index:100; border:1px solid var(--border); border-radius:4px; right:0;">
+                <!-- Other sports inserted here -->
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="filter-group">
           <label><span class="material-symbols-rounded">label</span>Tags</label>
           <div class="filter-row">
             <input type="text" id="filter-tags" placeholder="e.g. race, commute" style="flex:1">
@@ -137,6 +145,17 @@
         </div>
       </div>
 
+      <div id="sort-controls">
+        <div class="sort-ctrl">
+          <label>Sort:</label>
+          <button id="btn-sort-menu" class="sort-select-btn">
+            <span id="sort-current-icon" class="material-symbols-rounded">calendar_today</span>
+            <span id="sort-current-label">Date</span>
+            <span class="material-symbols-rounded arrow">expand_more</span>
+          </button>
+        </div>
+      </div>
+
       <div id="track-list">
         <div id="track-list-empty">No tracks loaded yet</div>
       </div>
@@ -157,10 +176,10 @@
             <button class="bm-btn" data-layer="opentopomap">Topo</button>
             <button class="bm-btn" data-layer="osm">OSM</button>
             <button class="bm-btn" data-layer="satellite">Satellite</button>
-            <div id="selected-extra-map" class="hidden"></div>
             <button id="btn-extra-layers" class="icon-btn" title="Additional Maps from iD Editor">
               <span class="material-symbols-rounded">menu</span>
             </button>
+            <div id="selected-extra-map" class="hidden"></div>
           </div>
           <div id="extra-layers-menu" class="hidden"></div>
           <div id="map-loader" class="hidden">
@@ -183,6 +202,7 @@
           <button class="tab-btn active" data-tab="graphs">Analysis</button>
           <button class="tab-btn" data-tab="insights">Insights</button>
           <button class="tab-btn" data-tab="details">Details</button>
+          <button class="tab-btn" data-tab="combined">Combined</button>
         </div>
 
         <div id="tab-graphs" class="tab-content active">
@@ -222,6 +242,9 @@
               </button>
               <button class="metric-pill"        data-metric="gearFront"   style="--pill-color:#A8C8A0" title="Toggle Front Gear graph" draggable="true">
                 <span class="material-symbols-rounded">settings_input_component</span>Front Gear
+              </button>
+              <button class="metric-pill"        data-metric="gears"       style="--pill-color:#FF8C00" title="Toggle Gears graph" draggable="true">
+                <span class="material-symbols-rounded">settings</span>Gears
               </button>
             </div>
             <div id="chart-options">
@@ -283,6 +306,15 @@
             <div id="details-empty" class="empty-state">
               <span class="material-symbols-rounded empty-icon">no_sim</span>
               <div class="empty-text">Select a track for details</div>
+            </div>
+          </div>
+        </div>
+
+        <div id="tab-combined" class="tab-content">
+          <div id="combined-view">
+            <div id="combined-empty" class="empty-state">
+              <span class="material-symbols-rounded empty-icon">no_sim</span>
+              <div class="empty-text">Select a track for combined analysis</div>
             </div>
           </div>
         </div>
