@@ -6,7 +6,8 @@
 
 import uPlot from 'uplot';
 import { TrackPoint, TrackStats, TrackData } from './parsers';
-import { gaussianSmooth, fmtSecs } from './utils';
+import { gaussianSmooth, fmtSecs, hexToRgba } from './utils';
+import { Zones } from './zones';
 
 // Augment uPlot to include our custom property
 interface WegPlot extends uPlot {
@@ -97,6 +98,9 @@ export const ChartView = (() => {
   let updatingRange: boolean = false; // guard against setScale hook re-entry during handle drag
   let pinnedPtIdx: number | null = null; // point index pinned by map click
   let lastMouseXVal: number | null = null; // last hovered x-value for keyboard zoom center
+  let lastHistMouseEvent: MouseEvent | null = null;
+  let hoveredHistData: HistData | null = null;
+  let hoveredHistCanvas: HTMLCanvasElement | null = null;
 
   let currentXRange: [number, number] | null = null; // [min, max] currently rendered
   let targetXRange: [number, number] | null = null; // [min, max] for smooth keyboard animation
@@ -238,6 +242,11 @@ export const ChartView = (() => {
     onClickCb = onClick;
     onPinChangeCb = onPinChange;
     container = document.getElementById('charts-container');
+    container?.addEventListener('scroll', () => {
+      if (lastHistMouseEvent && hoveredHistCanvas && hoveredHistData) {
+        updateHistTooltip(lastHistMouseEvent, hoveredHistCanvas, hoveredHistData);
+      }
+    });
     emptyEl = document.getElementById('chart-empty');
     selStatsEl = document.getElementById('chart-stats-sel');
     resetSelBtn = document.getElementById('btn-reset-selection');
@@ -1813,25 +1822,10 @@ export const ChartView = (() => {
   }
 
   function attachHistTooltip(canvas: HTMLCanvasElement, histData: HistData) {
-    const { def, plot } = histData;
-    const lineEl = document.getElementById('hist-line');
-
-    const getBinAt = (e: MouseEvent) => {
-      const { bins, BINS } = histData;
-      if (!bins) return null;
-      const rect = canvas.getBoundingClientRect();
-      const relY = e.clientY - rect.top;
-      // Use exact padding from drawHistogram: t: 4, b: 30
-      const pad = { t: 4, b: 30 };
-      const plotH = rect.height - pad.t - pad.b;
-      const rawI = Math.floor(((relY - pad.t) / plotH) * BINS!);
-      const binI = BINS! - 1 - rawI;
-      if (rawI < 0 || rawI >= BINS!) return null;
-      return binI;
-    };
+    const { plot } = histData;
 
     canvas.addEventListener('click', (e) => {
-      const binI = getBinAt(e);
+      const binI = getBinAt(canvas, histData, e);
       if (binI != null && plot) {
         const { min, max, BINS } = histData;
         const span = max! - min! || 1;
@@ -1841,26 +1835,29 @@ export const ChartView = (() => {
     });
 
     canvas.addEventListener('mousemove', (e) => {
-      if (!histTooltipEl) return;
-      const { bins, binAccum, min, max, BINS, def, plot } = histData;
-      if (!bins || !binAccum || min == null || max == null) return;
+      lastHistMouseEvent = e;
+      updateHistTooltip(e, canvas, histData);
+    });
 
-      const binI = getBinAt(e);
-      if (binI == null || !bins[binI]) {
-        histTooltipEl.style.display = 'none';
-        if (lineEl) lineEl.style.display = 'none';
-        if (plot) {
-          plot.hoveredHistY = null;
-          drawHistogram(canvas, histData, canvas.height / (window.devicePixelRatio || 1));
-        }
-        return;
+    canvas.addEventListener('mouseenter', () => {
+      hoveredHistCanvas = canvas;
+      hoveredHistData = histData;
+    });
+
+    canvas.addEventListener('mouseleave', () => {
+      if (hoveredHistCanvas === canvas) {
+        hoveredHistCanvas = null;
+        hoveredHistData = null;
       }
-
+      if (histTooltipEl) histTooltipEl.style.display = 'none';
+      const lineEl = document.getElementById('hist-line');
+      if (lineEl) lineEl.style.display = 'none';
       if (plot) {
-        const span = max - min || 1;
-        plot.hoveredHistY = min + (binI + 0.5) * (span / BINS!);
-        drawHistogram(canvas, histData, canvas.height / (window.devicePixelRatio || 1), binI);
+        plot.hoveredHistY = null;
+        drawHistogram(canvas, histData, canvas.height / (window.devicePixelRatio || 1));
       }
+    });
+  }
 
       const count = bins[binI];
       const total = bins.reduce((s, v) => s + v, 0);

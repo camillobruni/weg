@@ -4,54 +4,50 @@
 
 'use strict';
 
-/**
- * Returns a compact string representation of a timestamp using a URL-safe base64-like encoding.
- */
-export function compactId(ts: number): string {
-  const seconds = Math.floor(ts / 1000);
-  const chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_';
-  let res = '';
-  let n = seconds;
-  while (n > 0) {
-    res = chars[n % 64] + res;
-    n = Math.floor(n / 64);
-  }
-  return res || '0';
+export function haversine(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371e3; // Earth radius in metres
+  const phi1 = (lat1 * Math.PI) / 180;
+  const phi2 = (lat2 * Math.PI) / 180;
+  const deltaPhi = ((lat2 - lat1) * Math.PI) / 180;
+  const deltaLambda = ((lon2 - lon1) * Math.PI) / 180;
+
+  const a =
+    Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+    Math.cos(phi1) * Math.cos(phi2) * Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c;
 }
 
-/**
- * Returns a short random string (4 chars).
- */
-export function shortRandom(): string {
-  return Math.random().toString(36).substring(2, 6);
+export function compactId(timestamp: number): string {
+  // Use a compact representation of the timestamp (seconds since epoch)
+  // 1712650000 -> Base64
+  const buf = new Uint32Array([Math.floor(timestamp / 1000)]);
+  const b64 = btoa(String.fromCharCode(...new Uint8Array(buf.buffer)));
+  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
-/**
- * Returns a UUID v4 string.
- * Falls back to a manual implementation if crypto.randomUUID is not available (e.g., non-secure context).
- */
 export function generateId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID().slice(0, 8);
   }
-  // Fallback for non-secure contexts (HTTP) or older browsers
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
+  return Math.random().toString(36).slice(2, 10);
 }
 
-export function fmtSecs(s: number): string {
-  const h = Math.floor(s / 3600),
-    m = Math.floor((s % 3600) / 60);
-  return h > 0 ? `${h}h ${m}m` : `${m}m ${s % 60}s`;
+export function shortRandom(): string {
+  return Math.random().toString(36).slice(2, 6);
 }
 
 export function fmtDuration(s: number): string {
   if (s < 60) return `${Math.round(s)}s`;
   if (s < 3600) return `${Math.round(s / 60)}m`;
   return `${Math.round(s / 3600)}h`;
+}
+
+export function fmtSecs(s: number): string {
+  const h = Math.floor(s / 3600),
+    m = Math.floor((s % 3600) / 60);
+  return h > 0 ? `${h}h ${m}m` : `${m}m ${Math.floor(s % 60)}s`;
 }
 
 export function fmtDate(ts: number | string | Date): string {
@@ -120,4 +116,11 @@ export function gaussianSmooth(data: (number | null)[], sigma: number = 2): (num
     result[i] = weightSum > 0 ? val / weightSum : data[i];
   }
   return result;
+}
+
+export function hexToRgba(hex: string, alpha: number = 1): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
