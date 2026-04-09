@@ -876,7 +876,8 @@ export const ChartView = (() => {
       };
 
       statsTotalEl.innerHTML =
-        `<span class="all-chip material-symbols-rounded" title="Show full track and clear selection">all_inclusive</span>` + getHtml(visibleMin, visibleMax);
+        `<span class="all-chip material-symbols-rounded" title="Show full track and clear selection">all_inclusive</span>` + 
+        getHtml(xData[0]!, xData[xData.length - 1]!);
       statsTotalEl.querySelector('.all-chip')?.addEventListener('click', (e) => {
         e.stopPropagation();
         cancelSelection();
@@ -884,7 +885,7 @@ export const ChartView = (() => {
 
       if (selAnchorVal !== null && selEndVal !== null) {
         statsSelEl.innerHTML =
-          `<span class="sel-tag material-symbols-rounded" style="background:var(--chart-color); color:#000" title="Selected range">width_fixed</span>` +
+          `<span class="sel-tag material-symbols-rounded" title="Selected range">fit_width</span>` +
           getHtml(selAnchorVal, selEndVal, true);
         statsSelEl.style.display = 'flex';
       } else {

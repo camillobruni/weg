@@ -502,9 +502,10 @@ button {
 
 .track-color {
   width: 3px;
-  height: 20px;
   border-radius: 1px;
   flex-shrink: 0;
+  margin-right: 8px;
+  align-self: stretch;
 }
 .track-info {
   flex: 1;
@@ -980,26 +981,33 @@ body.dragging-sidebar {
   background: var(--surface2);
   color: var(--text-muted);
   font-weight: 500;
-  padding: 1px 4px;
-  border-radius: 3px;
-  font-size: 8px;
-  margin-right: 2px;
+  padding: 2px;
+  border-radius: 4px;
+  font-size: 12px;
+  margin-right: 4px;
   cursor: pointer;
   border: 1px solid var(--border);
   transition: all 0.1s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .all-chip:hover {
   background: var(--border);
   color: var(--text);
 }
 .sel-tag {
-  background: var(--accent);
-  color: #000;
+  background: var(--surface2);
+  color: var(--text-muted);
   font-weight: 500;
-  padding: 1px 4px;
-  border-radius: 3px;
-  font-size: 8px;
-  margin-right: 2px;
+  padding: 2px;
+  border-radius: 4px;
+  font-size: 12px;
+  margin-right: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
 }
 
 
