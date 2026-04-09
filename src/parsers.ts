@@ -579,10 +579,16 @@ export const Parsers = (() => {
               
               if (isMain) {
                 const name = getDeviceName(d);
-                if (!device) device = name;
+                // Prefer a name with product_name or garmin_product over generic ones
+                if (d.product_name || d.garmin_product || !device) {
+                  device = name;
+                }
+                
                 // Update existing main device if needed
                 if (devices.length > 0 && devices[0].type === 'main') {
-                  if (!devices[0].name) devices[0].name = d.product_name || d.garmin_product || d.product;
+                  if (d.product_name || d.garmin_product || !devices[0].name) {
+                    devices[0].name = d.product_name || d.garmin_product || d.product;
+                  }
                   if (!devices[0].manufacturer) devices[0].manufacturer = d.manufacturer;
                   if (!devices[0].serial && d.serial_number) devices[0].serial = String(d.serial_number);
                   if (!devices[0].version && d.software_version) devices[0].version = String(d.software_version);
