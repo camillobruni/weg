@@ -65,8 +65,9 @@ export const Storage = (() => {
   async function clear(): Promise<void> {
     const db = await openDB();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const tx = db.transaction([STORE_NAME, SETTINGS_STORE], 'readwrite');
       tx.objectStore(STORE_NAME).clear();
+      tx.objectStore(SETTINGS_STORE).clear();
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });

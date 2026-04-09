@@ -23,6 +23,7 @@ export interface AppState {
   sort?: string;
   map_pos?: [number, number, number];
   sel?: [number, number];
+  sel_point?: number;
   tab?: string;
 }
 
@@ -40,7 +41,9 @@ export const UrlState = (() => {
     if (p.has('map')) s.map = p.get('map')!;
     if (p.has('xaxis')) s.xaxis = p.get('xaxis')!;
     if (p.has('tab')) s.tab = p.get('tab')!;
-    if (p.has('metrics')) s.metrics = p.get('metrics')!.split(',');
+    if (p.has('sel_point')) s.sel_point = Number(p.get('sel_point'));
+    const metricsRaw = p.get('metrics');
+    if (metricsRaw) s.metrics = metricsRaw.split(',').filter(Boolean);
 
     if (p.has('f_date'))
       s.f_date = p
@@ -77,7 +80,9 @@ export const UrlState = (() => {
 
     if (p.has('sel')) {
       const parts = p.get('sel')!.split(',').map(Number);
-      if (parts.length === 2 && parts.every(isFinite)) s.sel = parts as [number, number];
+      if (parts.length === 2 && parts.every((v) => !isNaN(v) && isFinite(v))) {
+        s.sel = parts as [number, number];
+      }
     }
 
     return s;
@@ -94,7 +99,8 @@ export const UrlState = (() => {
       if (_state.track) p.set('track', _state.track);
       if (_state.map) p.set('map', _state.map);
       if (_state.xaxis && _state.xaxis !== 'time') p.set('xaxis', _state.xaxis);
-      if (_state.tab) p.set('tab', _state.tab);
+      if (_state.tab && _state.tab !== 'graphs') p.set('tab', _state.tab);
+      if (_state.sel_point !== undefined) p.set('sel_point', String(_state.sel_point));
       if (_state.q) p.set('q', _state.q);
       if (_state.re) p.set('re', '1');
 

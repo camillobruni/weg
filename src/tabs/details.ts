@@ -6,16 +6,21 @@
 
 import { TrackData } from '../parsers';
 import { Storage } from '../storage';
-import { fmtSecs, escHtml, fmtDateTime, getTagColor } from '../utils';
+import { fmtSecs, escHtml, fmtDateTime, getTagColor, fmtFileSize } from '../utils';
 
 let onTagsChangeCb: () => void = () => {};
 export function initDetails(onTagsChange: () => void) {
   onTagsChangeCb = onTagsChange;
 }
 
-export function renderDetails(track: TrackData, globalTags: string[] = []) {
+export function renderDetails(track: TrackData | null, globalTags: string[] = []) {
   const container = document.getElementById('details-view');
   if (!container) return;
+
+  if (!track) {
+    container.innerHTML = '';
+    return;
+  }
 
   const s = track.stats;
   const t0 = track.points[0].time;
@@ -76,8 +81,16 @@ export function renderDetails(track: TrackData, globalTags: string[] = []) {
             <div class="details-card-value" style="font-size:13px; word-break:break-all">${escHtml(track.fileName || '—')}</div>
           </div>
           <div class="details-card" style="padding: 12px">
+            <div class="details-card-label" style="font-size:10px">File Size</div>
+            <div class="details-card-value" style="font-size:16px">${track.fileSize ? fmtFileSize(track.fileSize) : '—'}</div>
+          </div>
+          <div class="details-card" style="padding: 12px">
             <div class="details-card-label" style="font-size:10px">Format</div>
             <div class="details-card-value" style="font-size:16px">${track.format.toUpperCase()}</div>
+          </div>
+          <div class="details-card" style="padding: 12px">
+            <div class="details-card-label" style="font-size:10px">Sport</div>
+            <div class="details-card-value" style="font-size:16px">${escHtml(track.sport || '—')} ${track.subSport ? `<span style="font-size:12px; color:var(--text-dim)">(${escHtml(track.subSport)})</span>` : ''}</div>
           </div>
           <div class="details-card" style="padding: 12px">
             <div class="details-card-label" style="font-size:10px">Device / Creator</div>
@@ -210,15 +223,26 @@ export function renderDetails(track: TrackData, globalTags: string[] = []) {
                   .join(' • ');
 
                 let sourceIcon = '';
-                const st = (d.sourceType || '').toLowerCase();
+                const st = String(d.sourceType || '').toLowerCase();
                 if (st.includes('local')) sourceIcon = 'memory';
                 else if (st.includes('antplus') || st.includes('ant_plus')) sourceIcon = 'settings_input_antenna';
                 else if (st.includes('bluetooth')) sourceIcon = 'bluetooth';
+
+                let deviceIcon = 'sensors';
+                const nameLower = name.toLowerCase();
+                if (nameLower.includes('heartrate') || nameLower.includes('hrm')) deviceIcon = 'favorite';
+                else if (nameLower.includes('power')) deviceIcon = 'bolt';
+                else if (nameLower.includes('speed')) deviceIcon = 'speed';
+                else if (nameLower.includes('cadence')) deviceIcon = 'directions_bike';
+                else if (nameLower.includes('barometer')) deviceIcon = 'air';
+                else if (nameLower.includes('temperature')) deviceIcon = 'device_thermostat';
+                else if (nameLower.includes('gps')) deviceIcon = 'location_on';
 
                 return `
                 <div class="details-card" style="padding: 10px">
                   <div style="display:flex; justify-content:space-between; align-items:baseline">
                     <div style="display:flex; align-items:center; gap:6px">
+                      <span class="material-symbols-rounded" style="font-size:16px; color:var(--text-dim)">${deviceIcon}</span>
                       <div style="font-size:13px; font-weight:700; color:var(--text)">${escHtml(name)}</div>
                       ${sourceIcon ? `<span class="material-symbols-rounded" style="font-size:14px; color:var(--text-dim)" title="${d.sourceType}">${sourceIcon}</span>` : ''}
                     </div>

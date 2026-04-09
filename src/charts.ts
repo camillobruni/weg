@@ -6,6 +6,8 @@
 
 import uPlot from 'uplot';
 import { TrackPoint, TrackStats, TrackData } from './parsers';
+import { gaussianSmooth, fmtSecs, hexToRgba } from './utils';
+import { Zones } from './zones.ts';
 
 // Augment uPlot to include our custom property
 interface WegPlot extends uPlot {
@@ -84,8 +86,11 @@ export const ChartView = (() => {
   let scaleSyncing: boolean = false;
   let activeMetrics: Set<string> = new Set(['elevation', 'speed']);
   let availableMetrics: Set<string> = new Set();
+  let smoothedMetrics: Set<string> = new Set(['speed', 'gradient']);
+  let metricsIncludingZero: Set<string> = new Set(['power']);
   let xAxis: string = 'time';
   let currentTrack: TrackData | null = null;
+  let allTracks: TrackData[] = [];
 
   // Selection / anchor
   let selAnchorVal: number | null = null; // x-value at drag-start / zoom left edge
@@ -94,16 +99,20 @@ export const ChartView = (() => {
   let updatingRange: boolean = false; // guard against setScale hook re-entry during handle drag
   let pinnedPtIdx: number | null = null; // point index pinned by map click
   let lastMouseXVal: number | null = null; // last hovered x-value for keyboard zoom center
+  let lastHistMouseEvent: MouseEvent | null = null;
+  let hoveredHistData: HistData | null = null;
+  let hoveredHistCanvas: HTMLCanvasElement | null = null;
 
   let currentXRange: [number, number] | null = null; // [min, max] currently rendered
   let targetXRange: [number, number] | null = null; // [min, max] for smooth keyboard animation
   let animId: number | null = null;
 
   // Callbacks
-  let onCursorMoveCb: ((pt: TrackPoint) => void) | null = null;
+  let onCursorMoveCb: ((pt: TrackPoint | null) => void) | null = null;
   let onRangeChangeCb: ((min: number | null, max: number | null, axis: string) => void) | null =
     null;
-  let onClickCb: ((pt: TrackPoint) => void) | null = null;
+  let onClickCb: ((pt: TrackPoint, idx: number) => void) | null = null;
+  let onPinChangeCb: ((idx: number | null) => void) | null = null;
 
   const HIST_W: number = 130;
   const ROW_BODY_PADDING: number = 28; // 14px left + 14px right
@@ -192,8 +201,8 @@ export const ChartView = (() => {
     },
     gearRear: {
       label: 'Rear Gear',
-      field: 'gearRear',
-      unit: '',
+      field: 'gearRearTooth',
+      unit: 'T',
       color: '#82E0AA',
       abbr: 'rgr',
       icon: 'settings',
@@ -202,13 +211,23 @@ export const ChartView = (() => {
     },
     gearFront: {
       label: 'Front Gear',
-      field: 'gearFront',
-      unit: '',
+      field: 'gearFrontTooth',
+      unit: 'T',
       color: '#A8C8A0',
       abbr: 'fgr',
       icon: 'settings_input_component',
       fmt: (v) => Math.round(v).toString(),
       fmtAxis: (v) => Math.round(v).toString(),
+    },
+    gears: {
+      label: 'Gears',
+      field: 'gears',
+      unit: '',
+      color: '#FF8C00',
+      abbr: 'gr',
+      icon: 'settings',
+      fmt: (v) => v.toFixed(2),
+      fmtAxis: (v) => v.toFixed(1),
     },
     battery: {
       label: 'Battery',
@@ -224,14 +243,21 @@ export const ChartView = (() => {
 
   // ── Init ──────────────────────────────────────────────────────
   function init(
-    onCursorMove: (pt: TrackPoint) => void,
+    onCursorMove: (pt: TrackPoint | null) => void,
     onRangeChange: (min: number | null, max: number | null, axis: string) => void,
-    onClick: (pt: TrackPoint) => void,
+    onClick: (pt: TrackPoint, idx: number) => void,
+    onPinChange: (idx: number | null) => void,
   ) {
     onCursorMoveCb = onCursorMove;
     onRangeChangeCb = onRangeChange;
     onClickCb = onClick;
+    onPinChangeCb = onPinChange;
     container = document.getElementById('charts-container');
+    container?.addEventListener('scroll', () => {
+      if (lastHistMouseEvent && hoveredHistCanvas && hoveredHistData) {
+        updateHistTooltip(lastHistMouseEvent, hoveredHistCanvas, hoveredHistData);
+      }
+    });
     emptyEl = document.getElementById('chart-empty');
     selStatsEl = document.getElementById('chart-stats-sel');
     resetSelBtn = document.getElementById('btn-reset-selection');
@@ -349,8 +375,11 @@ export const ChartView = (() => {
   }
 
   // ── Public API ────────────────────────────────────────────────
-  function loadTrack(track: TrackData) {
+  function loadTrack(track: TrackData, others: TrackData[] = []) {
     pinnedPtIdx = null;
+    selAnchorVal = null;
+    selEndVal = null;
+    allTracks = others;
 
     // Detect which metrics are available in this file
     availableMetrics = new Set(
@@ -369,6 +398,10 @@ export const ChartView = (() => {
       activeMetrics.delete('gearFront');
     }
 
+    if (availableMetrics.has('gears')) {
+      activeMetrics.add('gears');
+    }
+
     // Sync the pill buttons in the toolbar
     document.querySelectorAll('.metric-pill').forEach((el) => {
       const pill = el as HTMLElement;
@@ -384,6 +417,8 @@ export const ChartView = (() => {
 
   function clear() {
     pinnedPtIdx = null;
+    selAnchorVal = null;
+    selEndVal = null;
     currentTrack = null;
     destroyPlots();
     if (emptyEl) {
@@ -520,6 +555,7 @@ export const ChartView = (() => {
     return yData.map((v) => {
       if (v == null || !isFinite(v)) return '#888896';
       if (key === 'gradient') return gradientColor(v);
+      if (key === 'speed') return speedColor(v);
       const t = max === min ? 0.5 : Math.max(0, Math.min(1, (v - min) / (max - min)));
       if (t <= 0.25) return lerpHex('#4575b4', '#91bfdb', t / 0.25);
       if (t <= 0.5) return lerpHex('#91bfdb', '#fee090', (t - 0.25) / 0.25);
@@ -536,6 +572,7 @@ export const ChartView = (() => {
     selAnchorVal = null;
     selEndVal = null;
     pinnedPtIdx = null;
+    if (onPinChangeCb) onPinChangeCb(null);
 
     // Reset individual histogram pins
     plots.forEach((p) => {
@@ -625,6 +662,10 @@ export const ChartView = (() => {
   // ── Render ────────────────────────────────────────────────────
   function render(keepState = false) {
     let savedRange: [number, number] | null = null;
+    let savedScroll = 0;
+    if (keepState && container) {
+      savedScroll = container.scrollTop;
+    }
     if (keepState && plots.length) {
       const u = plots[0].uplot;
       savedRange = [u.scales.x!.min!, u.scales.x!.max!];
@@ -672,7 +713,7 @@ export const ChartView = (() => {
       console.log(`ChartView: Rendering charts with width=${w} (container=${containerW})`);
       available.forEach((key) => {
         const def = METRICS[key];
-        const yData = def.compute
+        let yData = def.compute
           ? def.compute(pts, fillNulls)
           : fillNulls(
               pts.map((p) => {
@@ -680,6 +721,11 @@ export const ChartView = (() => {
                 return v != null && def.transform ? def.transform(v) : v;
               }),
             );
+        
+        if (smoothedMetrics.has(key)) {
+          yData = gaussianSmooth(yData, 2);
+        }
+
         createChart(key, def, xData, yData, w, pts);
       });
     }
@@ -701,6 +747,10 @@ export const ChartView = (() => {
     // Re-apply map color if active
     _updateMapColorBtns();
     if (mapColorMetric) _fireMapColorCb();
+
+    if (keepState && container) {
+      container.scrollTop = savedScroll;
+    }
   }
 
   // ── Create one chart row ───────────────────────────────────────
@@ -721,22 +771,54 @@ export const ChartView = (() => {
 
     // Header
     const header = document.createElement('div');
-    header.className = 'chart-row-header';
+    header.className = 'chart-row-header' + (statsVisible ? ' with-histogram' : '');
 
     const labelEl = document.createElement('div');
     labelEl.className = 'chart-row-label-group';
     labelEl.innerHTML = `
-      <span class="material-symbols-rounded chart-row-icon">${def.icon}</span>
+      <span class="material-symbols-rounded chart-row-icon" style="--chart-color:${def.color}">${def.icon}</span>
       <span class="chart-row-label">${def.label}</span>
     `;
 
+    // Smoothing toggle
+    const smoothBtn = document.createElement('button');
+    smoothBtn.className = 'icon-btn mini smooth-btn' + (smoothedMetrics.has(metricKey) ? ' active' : '');
+    smoothBtn.title = 'Toggle data smoothing';
+    smoothBtn.innerHTML = `<span class="material-symbols-rounded">${smoothedMetrics.has(metricKey) ? 'blur_on' : 'blur_off'}</span>`;
+    smoothBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (smoothedMetrics.has(metricKey)) {
+        smoothedMetrics.delete(metricKey);
+      } else {
+        smoothedMetrics.add(metricKey);
+      }
+      render(true); // Re-render all charts to keep sync if needed (though only this one changes data)
+    });
+
     const mapColorBtn = document.createElement('button');
+
     mapColorBtn.className =
       'map-color-btn icon-btn' + (mapColorMetric === metricKey ? ' active' : '');
     mapColorBtn.dataset.metric = metricKey;
     mapColorBtn.title = 'Color map track by this metric';
     mapColorBtn.innerHTML = '<span class="material-symbols-rounded">colorize</span>';
     mapColorBtn.addEventListener('click', () => toggleMapColor(metricKey));
+
+    // Zero-filter toggle (Cadence/Power/Speed)
+    let zeroBtn: HTMLButtonElement | null = null;
+    if (metricKey === 'cadence' || metricKey === 'power' || metricKey === 'speed') {
+      zeroBtn = document.createElement('button');
+      const incZero = metricsIncludingZero.has(metricKey);
+      zeroBtn.className = 'icon-btn mini' + (incZero ? ' active' : '');
+      zeroBtn.title = incZero ? 'Currently INCLUDING 0 values' : 'Currently EXCLUDING 0 values';
+      zeroBtn.innerHTML = `<span class="material-symbols-rounded">${incZero ? 'exposure_zero' : 'mobile_off'}</span>`;
+      zeroBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (metricsIncludingZero.has(metricKey)) metricsIncludingZero.delete(metricKey);
+        else metricsIncludingZero.add(metricKey);
+        render(true);
+      });
+    }
 
     const statsTotalEl = document.createElement('div');
     statsTotalEl.className = 'chart-stats-total';
@@ -748,7 +830,15 @@ export const ChartView = (() => {
     statsContainer.className = 'chart-row-stats-container';
     statsContainer.append(statsTotalEl, statsSelEl);
 
-    header.append(labelEl, mapColorBtn, statsContainer);
+    const actionsEl = document.createElement('div');
+    actionsEl.className = 'chart-row-actions';
+    actionsEl.append(smoothBtn, mapColorBtn);
+
+    const rightActionsEl = document.createElement('div');
+    rightActionsEl.className = 'chart-row-right-actions';
+    if (zeroBtn) rightActionsEl.append(zeroBtn);
+
+    header.append(labelEl, actionsEl, statsContainer, rightActionsEl);
 
     const rowBody = document.createElement('div');
     rowBody.className = 'chart-row-body';
@@ -777,8 +867,10 @@ export const ChartView = (() => {
 
     // Per-range stats
     function updateHeaderStats(visibleMin: number, visibleMax: number) {
+      const incZero = metricsIncludingZero.has(metricKey) || (metricKey !== 'power' && metricKey !== 'cadence' && metricKey !== 'speed');
+
       const getHtml = (xMin: number, xMax: number, _isSel = false) => {
-        const s = rangeStats(xData, yData, xMin, xMax);
+        const s = rangeStats(xData, yData, xMin, xMax, incZero);
         if (!s) return '';
 
         let h = `
@@ -797,11 +889,18 @@ export const ChartView = (() => {
         return h;
       };
 
-      statsTotalEl.innerHTML = getHtml(visibleMin, visibleMax);
+      statsTotalEl.innerHTML =
+        `<span class="all-chip material-symbols-rounded" title="Show full track and clear selection">all_inclusive</span>` + 
+        getHtml(xData[0]!, xData[xData.length - 1]!);
+      statsTotalEl.querySelector('.all-chip')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        cancelSelection();
+      });
 
       if (selAnchorVal !== null && selEndVal !== null) {
         statsSelEl.innerHTML =
-          `<span class="sel-tag">SEL</span>` + getHtml(selAnchorVal, selEndVal, true);
+          `<span class="sel-tag material-symbols-rounded" title="Selected range">fit_width</span>` +
+          getHtml(selAnchorVal, selEndVal, true);
         statsSelEl.style.display = 'flex';
       } else {
         statsSelEl.style.display = 'none';
@@ -844,15 +943,21 @@ export const ChartView = (() => {
       },
       axes: [
         {
+          side: 2, // bottom
           stroke: '#555564',
           grid: { stroke: '#2e2e34', width: 1 },
           ticks: { stroke: '#2e2e34' },
           size: 30,
-          space: 60,
+          // Dynamic spacing: ensure at least 80px between labels, handling small widths safely
+          space: (self: uPlot, axisIdx: number, scaleMin: number, scaleMax: number, plotDim: number) => {
+            const minSpace = 80;
+            const maxLabels = Math.floor(plotDim / minSpace);
+            return maxLabels > 0 ? plotDim / maxLabels : minSpace;
+          },
           font: '10px system-ui',
           values: (isDistAxis
             ? (_u: uPlot, vals: number[]) => {
-                const range = _u.scales.x!.max! - _u.scales.x!.min!;
+                const range = (_u.scales.x?.max ?? 1) - (_u.scales.x?.min ?? 0);
                 const dec = range < 1 ? 3 : range < 5 ? 2 : range < 20 ? 1 : 0;
                 return vals.map((v) => (v != null ? `${v.toFixed(dec)} km` : ''));
               }
@@ -870,6 +975,7 @@ export const ChartView = (() => {
                 })) as any,
         },
         {
+          side: 3, // left
           stroke: '#555564',
           grid: { stroke: '#2e2e34', width: 1 },
           ticks: { stroke: '#2e2e34' },
@@ -881,45 +987,34 @@ export const ChartView = (() => {
       ],
       series: [
         {},
-        metricKey === 'elevation' || metricKey === 'gradient' || mapColorMetric === metricKey
-          ? // Invisible — we draw manually in the draw hook (except for the background fill)
-            {
-              label: def.label,
-              stroke: 'rgba(0,0,0,0)',
-              fill: hexToRgba(def.color, 0.08),
-              width: 0,
-              points: { show: false },
-            }
-          : {
-              label: def.label,
-              stroke: def.color,
-              fill: hexToRgba(def.color, 0.08),
-              width: 1.5,
-              points: { show: false },
-              paths: (metricKey === 'gearRear' || metricKey === 'gearFront') 
-                ? uPlot.paths.stepped!({ align: 1 }) 
-                : undefined,
-            },
+        // Main selected track series
+        {
+          label: def.label,
+          stroke: 'rgba(0,0,0,0)', // Stroke handled in draw hooks for layering
+          fill: hexToRgba(def.color, 0.08),
+          width: 0,
+          points: { show: false },
+        },
       ],
       hooks: {
         draw: [
-          ...(metricKey === 'elevation'
-            ? [(u: uPlot) => drawElevationGradient(u, xData as number[], yData as number[], gradData)]
-            : []),
-          ...(metricKey === 'gradient'
-            ? [(u: uPlot) => drawGradientChart(u, xData as number[], yData as number[])]
-            : []),
-          // Metric coloring sync: if this metric is coloring the map, fill the graph with it too
+          // 1. (bottom) Color / metric color of the selected track
           (u: uPlot) => {
-            if (
-              mapColorMetric === metricKey &&
-              metricKey !== 'elevation' &&
-              metricKey !== 'gradient'
-            ) {
+            if (metricKey === 'gears') {
+              drawTrackPath(u, xData as number[], yData as number[], def.color, 1.5, metricKey, null, pts);
+            } else if (metricKey === 'elevation') {
+              drawElevationGradient(u, xData as number[], yData as number[], gradData);
+            } else if (metricKey === 'gradient') {
+              drawGradientChart(u, xData as number[], yData as number[]);
+            } else if (mapColorMetric === metricKey) {
               drawMetricColorFill(u, xData as number[], yData as number[], pts, metricKey);
+            } else {
+              // Normal colored line
+               drawTrackPath(u, xData as number[], yData as number[], def.color, 1.5, metricKey, null, pts);
             }
           },
-          (u: uPlot) => drawHoverLine(u, yData as number[], def.color, pts),
+
+          // 2. Pinned point (middle)
           (u: uPlot) => {
             const plot = plots.find((p) => p.uplot === u);
             if (!plot) return;
@@ -935,26 +1030,32 @@ export const ChartView = (() => {
               if (plot.pinnedHistY != null) {
                 drawYAxisHighlight(u, xData, yData, plot.pinnedHistY, def.color, def);
               }
-              // Priority 3: Individual histogram hovered Y-pos (this chart only)
-              else if (plot.hoveredHistY != null) {
-                drawYAxisHighlight(u, xData, yData, plot.hoveredHistY, def.color, def);
-              }
             }
           },
+
+          // 3. Pinned & Hover elements (labels, vertical lines)
           (u: uPlot) => {
             const hIdx = u.cursor.idx;
             const hasPinned = pinnedPtIdx != null;
-            const hasHover = hIdx != null && u.cursor.left! >= 0;
+            
+            let hasHover = hIdx != null && u.cursor.left! >= 0;
+            if (hasHover && pinnedPtIdx == null) {
+              const cy = u.valToPos(yData[hIdx!]!, 'y', true);
+              const dist = Math.abs(u.cursor.top! - cy);
+              if (dist > 100) hasHover = false;
+            }
 
-            // 1. Draw vertical lines (drawn first, underneath labels)
+            // A. Draw Pinned vertical line (bottom-most of this group)
             if (hasPinned) {
-              drawVerticalLineOnly(u, pts, pinnedPtIdx!, def.color);
-            }
-            if (hasHover && hIdx !== pinnedPtIdx) {
-              drawVerticalLineOnly(u, pts, hIdx!, hexToRgba(def.color, 0.4));
+              drawVerticalLineOnly(u, pts, pinnedPtIdx!, def.color, 0.6);
             }
 
-            // ── Bold selection x-axis line ──
+            // B. Draw Hover vertical line
+            if (hasHover && hIdx !== pinnedPtIdx) {
+              drawVerticalLineOnly(u, pts, hIdx!, hexToRgba(def.color, 0.4), 1.0);
+            }
+
+            // C. Bold selection x-axis line & span pill
             if (selAnchorVal != null && selEndVal != null) {
               const ctx = u.ctx;
               const dpr = window.devicePixelRatio || 1;
@@ -970,7 +1071,6 @@ export const ChartView = (() => {
               ctx.lineTo(ex, bb.top + bb.height);
               ctx.stroke();
 
-              // Selection span label (centered pill, sticky)
               const span = Math.abs(selEndVal - selAnchorVal);
               const label = xAxis === 'distance' ? `${span.toFixed(2)} km` : fmtSecs(span);
               const fontSize = 9 * dpr;
@@ -978,19 +1078,15 @@ export const ChartView = (() => {
               if (ctx.font !== fontStr) ctx.font = fontStr;
               const tw = ctx.measureText(label).width;
 
-              // Sticky logic: find the visible start/end of the selection
               const visibleL = Math.max(bb.left, ax);
               const visibleR = Math.min(bb.left + bb.width, ex);
               const visibleW = visibleR - visibleL;
 
-              // Only draw if the visible part of the selection is wide enough for the pill
               if (visibleW > tw + 14 * dpr) {
                 const padH = 5 * dpr;
                 const padV = 2 * dpr;
                 const bw = tw + padH * 2;
                 const bh = fontSize + padV * 2;
-
-                // Center the pill within the VISIBLE portion of the selection
                 const bx = (visibleL + visibleR) / 2 - bw / 2;
                 const by = bb.top + bb.height - bh / 2;
 
@@ -1008,12 +1104,14 @@ export const ChartView = (() => {
               ctx.restore();
             }
 
-            // 2. Draw label pills (on top)
+            // D. Draw label pills (on top)
+            // Pinned labels first (semi-transparent)
             if (hasPinned) {
-              drawXAxisLabels(u, pts, pinnedPtIdx!, def.color, true); // true = skipLine
+              drawXAxisLabels(u, pts, pinnedPtIdx!, def.color, true, 0.7);
             }
+            // Hover labels last (fully opaque, topmost)
             if (hasHover && hIdx !== pinnedPtIdx) {
-              drawXAxisLabels(u, pts, hIdx!, def.color, true); // true = skipLine
+              drawXAxisLabels(u, pts, hIdx!, def.color, true, 1.0);
             }
           },
         ],
@@ -1034,9 +1132,18 @@ export const ChartView = (() => {
 
             // ── Floating y-value next to cursor dot ──
             const s = (u as any)._strasse;
+            let showHover = idx != null && yData[idx] != null;
+            
+            // Distance threshold: if no pinned point, check proximity to data line
+            if (showHover && pinnedPtIdx == null) {
+              const cy = u.valToPos(yData[idx!]!, 'y', true);
+              const dist = Math.abs(u.cursor.top! - cy);
+              if (dist > 100) showHover = false;
+            }
+
             if (s) {
-              if (idx != null && yData[idx] != null) {
-                updateTooltip(u, s.curYVal, idx, xData as number[], yData as number[], pts, def, metricKey);
+              if (showHover) {
+                updateTooltip(u, s.curYVal, idx!, xData as number[], yData as number[], pts, def, metricKey);
               } else {
                 s.curYVal.style.display = 'none';
               }
@@ -1044,7 +1151,14 @@ export const ChartView = (() => {
 
             // Map marker
             if (idx != null && pts[idx]) {
-              if (onCursorMoveCb) onCursorMoveCb(pts[idx]);
+              if (onCursorMoveCb && (pinnedPtIdx != null || showHover)) {
+                onCursorMoveCb(pts[idx]);
+              } else if (onCursorMoveCb && !showHover) {
+                // If we're too far and nothing is pinned, hide map cursor
+                onCursorMoveCb(null);
+              }
+            } else if (idx === null && onCursorMoveCb) {
+              onCursorMoveCb(null);
             }
 
             // Highlight matching histogram bucket
@@ -1096,9 +1210,8 @@ export const ChartView = (() => {
             updateSelOverlay();
             redrawHistograms();
 
-            if (onRangeChangeCb) {
-              if (selAnchorVal !== null) onRangeChangeCb(selAnchorVal, selEndVal, xAxis);
-              else onRangeChangeCb(min!, max!, xAxis);
+            if (onRangeChangeCb && selAnchorVal !== null) {
+              onRangeChangeCb(selAnchorVal, selEndVal, xAxis);
             }
           },
         ],
@@ -1194,7 +1307,7 @@ export const ChartView = (() => {
 
     // Floating pinned y-value
     const pinYVal = document.createElement('div');
-    pinYVal.className = 'cur-y-val';
+    pinYVal.className = 'cur-y-val pin';
     pinYVal.style.cssText = `color:${def.color};display:none`;
 
     overlay.append(
@@ -1258,7 +1371,8 @@ export const ChartView = (() => {
       if (idx != null && pts[idx]) {
         pinnedPtIdx = idx;
         plots.forEach(({ uplot: u }) => u.redraw(false));
-        if (onClickCb) onClickCb(pts[idx]);
+        if (onClickCb) onClickCb(pts[idx], idx);
+        if (onPinChangeCb) onPinChangeCb(idx);
       }
     });
 
@@ -1494,10 +1608,14 @@ export const ChartView = (() => {
     const binAccum = new Array(BINS).fill(0); // accumulated x-weight per bin (time in s or dist in km)
 
     const span = max - min || 1;
+    const metricKey = Object.keys(METRICS).find(k => METRICS[k] === histData.def);
+    const incZero = !metricKey || metricsIncludingZero.has(metricKey) || (metricKey !== 'power' && metricKey !== 'cadence' && metricKey !== 'speed');
 
     for (let i = 0; i < yData.length; i++) {
       const v = yData[i];
       if (v == null || !isFinite(v)) continue;
+      if (v === 0 && !incZero) continue;
+
       const bi = Math.min(BINS - 1, Math.floor(((v - min) / span) * BINS));
       bins[bi]++;
 
@@ -1536,9 +1654,14 @@ export const ChartView = (() => {
       const selBinAccum = new Array(BINS).fill(0);
       const { yData, xData } = histData;
       const span = max - min || 1;
+      const metricKey = Object.keys(METRICS).find(k => METRICS[k] === histData.def);
+      const incZero = !metricKey || metricsIncludingZero.has(metricKey) || (metricKey !== 'power' && metricKey !== 'cadence' && metricKey !== 'speed');
+
       for (let i = 0; i < yData.length; i++) {
         const v = yData[i];
         if (v == null || !isFinite(v)) continue;
+        if (v === 0 && !incZero) continue;
+
         const x = xData[i];
         if (x == null || x < selAnchorVal! || x > selEndVal!) continue;
         const bi = Math.min(BINS - 1, Math.floor(((v - min) / span) * BINS));
@@ -1602,7 +1725,7 @@ export const ChartView = (() => {
     for (let i = 0; i < BINS; i++) {
       if (!bins[i]) continue;
       const bw = (bins[i] / peak) * plotW;
-      const alpha = hasSel ? 0.15 : 0.3 + 0.6 * (bins[i] / peak);
+      const alpha = hasSel ? 0.15 : 0.6;
       ctx.fillStyle = hexToRgba(def.color, alpha);
       ctx.fillRect(pad.l, binY(i), bw, binH);
     }
@@ -1752,25 +1875,10 @@ export const ChartView = (() => {
   }
 
   function attachHistTooltip(canvas: HTMLCanvasElement, histData: HistData) {
-    const { def, plot } = histData;
-    const lineEl = document.getElementById('hist-line');
-
-    const getBinAt = (e: MouseEvent) => {
-      const { bins, BINS } = histData;
-      if (!bins) return null;
-      const rect = canvas.getBoundingClientRect();
-      const relY = e.clientY - rect.top;
-      // Use exact padding from drawHistogram: t: 4, b: 30
-      const pad = { t: 4, b: 30 };
-      const plotH = rect.height - pad.t - pad.b;
-      const rawI = Math.floor(((relY - pad.t) / plotH) * BINS!);
-      const binI = BINS! - 1 - rawI;
-      if (rawI < 0 || rawI >= BINS!) return null;
-      return binI;
-    };
+    const { plot } = histData;
 
     canvas.addEventListener('click', (e) => {
-      const binI = getBinAt(e);
+      const binI = getBinAt(canvas, histData, e);
       if (binI != null && plot) {
         const { min, max, BINS } = histData;
         const span = max! - min! || 1;
@@ -1780,108 +1888,160 @@ export const ChartView = (() => {
     });
 
     canvas.addEventListener('mousemove', (e) => {
-      if (!histTooltipEl) return;
-      const { bins, binAccum, min, max, BINS, def, plot } = histData;
-      if (!bins || !binAccum || min == null || max == null) return;
+      lastHistMouseEvent = e;
+      updateHistTooltip(e, canvas, histData);
+    });
 
-      const binI = getBinAt(e);
-      if (binI == null || !bins[binI]) {
-        histTooltipEl.style.display = 'none';
-        if (lineEl) lineEl.style.display = 'none';
-        if (plot) {
-          plot.hoveredHistY = null;
-          drawHistogram(canvas, histData, canvas.height / (window.devicePixelRatio || 1));
-        }
-        return;
-      }
-
-      if (plot) {
-        const span = max - min || 1;
-        plot.hoveredHistY = min + (binI + 0.5) * (span / BINS!);
-        drawHistogram(canvas, histData, canvas.height / (window.devicePixelRatio || 1), binI);
-      }
-
-      const count = bins[binI];
-      const total = bins.reduce((s, v) => s + v, 0);
-      const pct = (count / total) * 100;
-
-      const span = max - min || 1;
-      const low = min + binI * (span / BINS!);
-      const high = min + (binI + 1) * (span / BINS!);
-      const label = `${def.fmt(low, true)} – ${def.fmt(high, true)} ${def.unit}`;
-
-      const totalAccum =
-        xAxis === 'distance' ? `${binAccum[binI].toFixed(2)} km` : fmtSecs(binAccum[binI]);
-      const totalPct = (binAccum[binI] / binAccum.reduce((s, v) => s + v, 0)) * 100;
-
-      let html = `
-        <div class="hist-tt-header" style="border-left-color:${def.color}">${label}</div>
-      `;
-
-      if (totalAccum) {
-        html += `<div class="hist-tt-grid">
-          <span class="hist-tt-label">${xAxis === 'distance' ? 'Dist' : 'Time'}</span>
-          <span class="hist-tt-value">${totalAccum}</span>
-          <span class="hist-tt-pct">${totalPct.toFixed(1)}%</span>
-        </div>`;
-      }
-
-      // Selection context
-      if (histData.selBins && histData.selBinAccum) {
-        const stotalAccum =
-          xAxis === 'distance'
-            ? `${histData.selBinAccum[binI].toFixed(2)} km`
-            : fmtSecs(histData.selBinAccum[binI]);
-        const stotalPct =
-          (histData.selBinAccum[binI] / histData.selBinAccum.reduce((s, v) => s + v, 0)) * 100;
-
-        html += `
-          <div class="hist-tt-grid sel-row">
-            <span class="hist-tt-label sel">Sel ${xAxis === 'distance' ? 'Dist' : 'Time'}</span>
-            <span class="hist-tt-value sel">${stotalAccum}</span>
-            <span class="hist-tt-pct sel">${stotalPct.toFixed(1)}%</span>
-          </div>
-        `;
-      }
-
-      histTooltipEl.innerHTML = html;
-
-      // Position tooltip: fixed X left of canvas, Y centered on bin
-      histTooltipEl.style.display = 'block';
-      const ttH = histTooltipEl.offsetHeight;
-      const ttW = histTooltipEl.offsetWidth;
-      // binY(i) = pad.t + (BINS-1-i) * (plotH/BINS), centre = + 0.5*(plotH/BINS)
-      const rect = canvas.getBoundingClientRect();
-      const pad = { t: 4, b: 30 };
-      const plotH = rect.height - pad.t - pad.b;
-      const binCY = rect.top + pad.t + (BINS! - 1 - binI + 0.5) * (plotH / BINS!);
-      const ttLeft = rect.left - ttW - 10;
-      const ttTop = Math.round(binCY - ttH / 2);
-      histTooltipEl.style.left = `${ttLeft}px`;
-      histTooltipEl.style.top = `${ttTop}px`;
-
-      // Dotted line: tooltip right edge → left edge of bars (through axes area)
-      if (lineEl) {
-        const lineY = Math.round(binCY);
-        const lineLeft = ttLeft + ttW;
-        const barLeft = rect.left + (histData.padL || 0);
-        const lineW = barLeft - lineLeft;
-        lineEl.style.display = 'block';
-        lineEl.style.left = `${lineLeft}px`;
-        lineEl.style.top = `${lineY}px`;
-        lineEl.style.width = `${Math.max(0, lineW)}px`;
-        lineEl.style.borderTopColor = hexToRgba(def.color, 0.5);
-      }
+    canvas.addEventListener('mouseenter', () => {
+      hoveredHistCanvas = canvas;
+      hoveredHistData = histData;
     });
 
     canvas.addEventListener('mouseleave', () => {
+      if (hoveredHistCanvas === canvas) {
+        hoveredHistCanvas = null;
+        hoveredHistData = null;
+      }
       if (histTooltipEl) histTooltipEl.style.display = 'none';
+      const lineEl = document.getElementById('hist-line');
       if (lineEl) lineEl.style.display = 'none';
       if (plot) {
         plot.hoveredHistY = null;
         drawHistogram(canvas, histData, canvas.height / (window.devicePixelRatio || 1));
       }
     });
+  }
+
+  function getBinAt(canvas: HTMLCanvasElement, histData: HistData, e: MouseEvent) {
+    const { bins, BINS } = histData;
+    if (!bins) return null;
+    const rect = canvas.getBoundingClientRect();
+    const relY = e.clientY - rect.top;
+    // Use exact padding from drawHistogram: t: 4, b: 30
+    const pad = { t: 4, b: 30 };
+    const plotH = rect.height - pad.t - pad.b;
+    const rawI = Math.floor(((relY - pad.t) / plotH) * BINS!);
+    const binI = BINS! - 1 - rawI;
+    if (rawI < 0 || rawI >= BINS!) return null;
+    return binI;
+  }
+
+  function updateHistTooltip(e: MouseEvent, canvas: HTMLCanvasElement, histData: HistData) {
+    if (!histTooltipEl) return;
+    const { bins, binAccum, min, max, BINS, def, plot } = histData;
+    if (!bins || !binAccum || min == null || max == null) return;
+
+    const lineEl = document.getElementById('hist-line');
+    const binI = getBinAt(canvas, histData, e);
+    
+    if (binI == null || !bins[binI]) {
+      histTooltipEl.style.display = 'none';
+      if (lineEl) lineEl.style.display = 'none';
+      if (plot) {
+        plot.hoveredHistY = null;
+        drawHistogram(canvas, histData, canvas.height / (window.devicePixelRatio || 1));
+      }
+      return;
+    }
+
+    if (plot) {
+      const span = max - min || 1;
+      plot.hoveredHistY = min + (binI + 0.5) * (span / BINS!);
+      drawHistogram(canvas, histData, canvas.height / (window.devicePixelRatio || 1), binI);
+    }
+
+    const count = bins[binI];
+    const total = bins.reduce((s, v) => s + v, 0);
+    const pct = (count / total) * 100;
+
+    const span = max - min || 1;
+    const low = min + binI * (span / BINS!);
+    const high = min + (binI + 1) * (span / BINS!);
+    const label = `${def.fmt(low, true)} – ${def.fmt(high, true)} ${def.unit}`;
+
+    // Zone info
+    let zoneHtml = '';
+    const mid = (low + high) / 2;
+    const metricKey = Object.keys(METRICS).find((k) => METRICS[k] === def);
+    let zones: any[] = [];
+    if (metricKey === 'power') zones = Zones.getPowerZones();
+    else if (metricKey === 'hr') zones = Zones.getHRZones();
+
+    if (zones.length > 0) {
+      const zIdx = zones.findIndex((z) => mid >= z.min && mid < z.max);
+      const z =
+        zIdx !== -1
+          ? zones[zIdx]
+          : mid >= zones[zones.length - 1].min
+            ? zones[zones.length - 1]
+            : null;
+      if (z) {
+        const finalZIdx = zIdx !== -1 ? zIdx : zones.length - 1;
+        zoneHtml = `
+          <div style="display:flex; align-items:center; gap:8px; margin-top:2px; margin-bottom:8px; padding-left:8px; border-left:3px solid ${z.color}; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px">
+            <span style="color:var(--text)">Z${finalZIdx + 1}</span>
+            <span style="color:var(--text-dim)">·</span>
+            <span style="color:var(--text-muted)">${z.name}</span>
+          </div>
+        `;
+      }
+    }
+
+    const totalAccum =
+      xAxis === 'distance' ? `${binAccum[binI].toFixed(2)} km` : fmtSecs(binAccum[binI]);
+    const totalPct = (binAccum[binI] / binAccum.reduce((s, v) => s + v, 0)) * 100;
+
+    let html = `
+      <div class="hist-tt-header" style="border-left-color:${def.color}">${label}</div>
+      ${zoneHtml}
+    `;
+
+    if (totalAccum) {
+      html += `<div class="hist-tt-grid">
+        <span class="hist-tt-label">${xAxis === 'distance' ? 'Dist' : 'Time'}</span>
+        <span class="hist-tt-value">${totalAccum}</span>
+        <span class="hist-tt-pct">${totalPct.toFixed(1)}%</span>
+      </div>`;
+    }
+
+    // Selection context
+    if (histData.selBins && histData.selBinAccum) {
+      const stotalAccum =
+        xAxis === 'distance'
+          ? `${histData.selBinAccum[binI].toFixed(2)} km`
+          : fmtSecs(histData.selBinAccum[binI]);
+      const stotalPct =
+        (histData.selBinAccum[binI] / histData.selBinAccum.reduce((s, v) => s + v, 0)) * 100;
+
+      html += `
+        <div class="hist-tt-grid sel-row">
+          <span class="hist-tt-label sel">Sel ${xAxis === 'distance' ? 'Dist' : 'Time'}</span>
+          <span class="hist-tt-value sel">${stotalAccum}</span>
+          <span class="hist-tt-pct sel">${stotalPct.toFixed(1)}%</span>
+        </div>
+      `;
+    }
+
+    histTooltipEl.innerHTML = html;
+
+    // Position tooltip: fixed X left of canvas, Y centered on bin
+    histTooltipEl.style.display = 'block';
+    const ttH = histTooltipEl.offsetHeight;
+    const ttW = histTooltipEl.offsetWidth;
+    const rect = canvas.getBoundingClientRect();
+    const plotH = rect.height - 4 - 30; // pad.t + pad.b
+    const binCenterY = rect.top + 4 + (BINS! - 1 - binI + 0.5) * (plotH / BINS!);
+
+    histTooltipEl.style.left = `${rect.left - ttW - 12}px`;
+    histTooltipEl.style.top = `${binCenterY - ttH / 2}px`;
+
+    // Horizontal line sync
+    if (lineEl) {
+      lineEl.style.display = 'block';
+      lineEl.style.top = `${binCenterY}px`;
+      lineEl.style.left = `0px`;
+      lineEl.style.width = `${rect.left}px`;
+    }
   }
 
   // ── Helpers ───────────────────────────────────────────────────
@@ -1905,6 +2065,7 @@ export const ChartView = (() => {
     yData: (number | null)[],
     xMin: number,
     xMax: number,
+    incZero = true,
   ) {
     let min = Infinity,
       max = -Infinity,
@@ -1914,6 +2075,8 @@ export const ChartView = (() => {
       if (xData[i] == null || xData[i]! < xMin || xData[i]! > xMax) continue;
       const v = yData[i];
       if (v == null || !isFinite(v)) continue;
+      if (v === 0 && !incZero) continue;
+      
       if (v < min) min = v;
       if (v > max) max = v;
       sum += v;
@@ -1977,10 +2140,25 @@ export const ChartView = (() => {
       }
     }
 
-    const content =
+    let content =
       metricKey !== 'elevation'
         ? `${def.fmt(yData[idx]!, false)}&nbsp;${def.unit}`
         : `${def.fmt(yData[idx]!, false)}&nbsp;${def.unit} <span style="color:${gColor};margin-left:6px;font-size:12px">∠</span> ${Math.abs(g).toFixed(1)}%`;
+
+    // Special handling for gears: show tooth count if available
+    if (metricKey === 'gearRear' && pts[idx].gearRearTooth != null) {
+      content = `${pts[idx].gearRearTooth}T <span style="font-size:10px; opacity:0.6; margin-left:4px">(pos ${yData[idx]})</span>`;
+    } else if (metricKey === 'gearFront' && pts[idx].gearFrontTooth != null) {
+      content = `${pts[idx].gearFrontTooth}T <span style="font-size:10px; opacity:0.6; margin-left:4px">(pos ${yData[idx]})</span>`;
+    } else if (metricKey === 'gears') {
+      const p = pts[idx];
+      const front = p.gearFrontTooth != null ? `${p.gearFrontTooth}T` : (p.gearFront != null ? `pos ${p.gearFront}` : '');
+      const rear = p.gearRearTooth != null ? `${p.gearRearTooth}T` : (p.gearRear != null ? `pos ${p.gearRear}` : '');
+      
+      if (front || rear) {
+        content += ` <span style="font-size:10px; opacity:0.6; margin-left:4px">(${front} / ${rear})</span>`;
+      }
+    }
 
     if (el.innerHTML !== content) el.innerHTML = content;
 
@@ -2026,7 +2204,7 @@ export const ChartView = (() => {
       ctx.beginPath();
       ctx.moveTo(x0, y0);
       ctx.lineTo(x1, y1);
-      ctx.strokeStyle = gradientColor(g);
+      ctx.strokeStyle = hexToRgba(gradientColor(g), 0.8);
       ctx.lineWidth = 1.5 * dpr;
       ctx.stroke();
     }
@@ -2057,8 +2235,8 @@ export const ChartView = (() => {
       ctx.beginPath();
       ctx.moveTo(x0, y0);
       ctx.lineTo(x1, y1);
-      ctx.strokeStyle = gradientColor(g);
-      ctx.lineWidth = 1.25 * dpr;
+      ctx.strokeStyle = hexToRgba(gradientColor(g), 0.8);
+      ctx.lineWidth = 1.5 * dpr;
       ctx.stroke();
     }
 
@@ -2101,7 +2279,7 @@ export const ChartView = (() => {
     ctx.restore();
   }
 
-  function drawVerticalLineOnly(u: uPlot, pts: TrackPoint[], idx: number, color: string) {
+  function drawVerticalLineOnly(u: uPlot, pts: TrackPoint[], idx: number, color: string, opacity: number = 1.0) {
     const dpr = window.devicePixelRatio || 1;
     const bb = u.bbox;
     const ctx = u.ctx;
@@ -2112,12 +2290,13 @@ export const ChartView = (() => {
     const cx = u.valToPos(xVal, 'x', true);
 
     ctx.save();
+    ctx.globalAlpha = opacity;
     ctx.beginPath();
     ctx.strokeStyle = color;
     ctx.lineWidth = 1 * dpr;
-    // Dotted line for hover? No, calling code handles color/style
-    ctx.moveTo(cx, bb.top + 14 * dpr);
-    ctx.lineTo(cx, bb.top + bb.height + 25 * dpr);
+    // Dotted line range should match where labels are (flush top to bottom axis)
+    ctx.moveTo(cx, bb.top + 16 * dpr); 
+    ctx.lineTo(cx, bb.top + bb.height + 10 * dpr);
     ctx.stroke();
     ctx.restore();
   }
@@ -2128,22 +2307,20 @@ export const ChartView = (() => {
     idx: number,
     color: string,
     skipLine = false,
+    opacity: number = 1.0,
   ) {
     const dpr = window.devicePixelRatio || 1;
     const bb = u.bbox;
     const ctx = u.ctx;
     const t0 = pts[0].time || 0;
-    const xVal = xAxis === 'distance' ? (pts[idx].dist || 0) / 1000 : (pts[idx].time! - t0) / 1000;
-    const cx = u.valToPos(xVal, 'x', true);
+    const distVal = (pts[idx].dist || 0) / 1000;
+    const timeVal = (pts[idx].time! - t0) / 1000;
+    const cx = u.valToPos(xAxis === 'distance' ? distVal : timeVal, 'x', true);
 
-    const topLabel = xAxis === 'distance' ? `${xVal.toFixed(2)} km` : fmtSecs(xVal);
-    const bottomLabel = pts[idx].time
-      ? new Date(pts[idx].time!).toLocaleTimeString([], {
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-        })
-      : '';
+    // Bottom label: matches the current X axis unit
+    const bottomLabel = xAxis === 'distance' ? `${distVal.toFixed(2)} km` : fmtSecs(timeVal);
+    // Top label: shows the other unit (simplified)
+    const topLabel = xAxis === 'distance' ? fmtSecs(timeVal) : `${distVal.toFixed(2)} km`;
 
     const drawPill = (text: string, x: number, y: number, isTop: boolean) => {
       const fontStr = `bold ${10 * dpr}px system-ui, sans-serif`;
@@ -2156,6 +2333,7 @@ export const ChartView = (() => {
       const ry = y - bh / 2;
 
       ctx.save();
+      ctx.globalAlpha = opacity;
       ctx.setLineDash([]); // Ensure pills are not dashed
       ctx.beginPath();
       if ((ctx as any).roundRect) (ctx as any).roundRect(clampedRx, ry, bw, bh, 3 * dpr);
@@ -2173,9 +2351,14 @@ export const ChartView = (() => {
       ctx.restore();
     };
 
-    if (!skipLine) drawVerticalLineOnly(u, pts, idx, color);
-    drawPill(topLabel, cx, bb.top + 7 * dpr, true);
-    drawPill(bottomLabel, cx, bb.top + bb.height + 18 * dpr, false);
+    if (!skipLine) drawVerticalLineOnly(u, pts, idx, color, opacity);
+    
+    const pillH = 16 * dpr;
+    // Top label: flush to the top edge of the plot
+    drawPill(topLabel, cx, bb.top + (pillH / 2), true);
+    
+    // Bottom label: aligned with the horizontal axis labels (centered in the 30px axis area)
+    drawPill(bottomLabel, cx, bb.top + bb.height + 15 * dpr, false);
   }
 
   function drawPinnedDot(
@@ -2394,9 +2577,30 @@ export const ChartView = (() => {
   function gradientColor(g: number | null) {
     if (g == null) return '#888896';
     const absG = Math.abs(g);
-    const t = Math.min(1, absG / 15);
+    const t = Math.min(1, absG / 8);
     if (g > 0) return lerpHex('#A8C8A0', '#d73027', t); // Green to Red
     return lerpHex('#A8C8A0', '#4575b4', t); // Green to Blue
+  }
+
+  function speedColor(s: number | null) {
+    if (s == null) return '#888896';
+    const kmh = s * 3.6;
+
+    if (kmh <= 5) return '#4575b4'; // Solid Blue for very slow
+    if (kmh >= 60) return '#d73027'; // Solid Red for very fast
+
+    // High resolution between 5 and 45 (10km/h per segment)
+    if (kmh <= 45) {
+      const t = (kmh - 5) / 40; // 0 to 1
+      if (t <= 0.25) return lerpHex('#4575b4', '#91bfdb', t / 0.25); // 5-15: Blue -> LBlue
+      if (t <= 0.5) return lerpHex('#91bfdb', '#abdda4', (t - 0.25) / 0.25); // 15-25: LBlue -> Green
+      if (t <= 0.75) return lerpHex('#abdda4', '#fee08b', (t - 0.5) / 0.25); // 25-35: Green -> Yellow
+      return lerpHex('#fee08b', '#fc8d59', (t - 0.75) / 0.25); // 35-45: Yellow -> Orange
+    } else {
+      // 45-60: Orange -> Red
+      const t = (kmh - 45) / 15;
+      return lerpHex('#fc8d59', '#d73027', t);
+    }
   }
 
   function smoothGradient(pts: TrackPoint[], windowMetres: number) {
@@ -2435,12 +2639,6 @@ export const ChartView = (() => {
     return res;
   }
 
-  function fmtSecs(s: number) {
-    const h = Math.floor(s / 3600),
-      m = Math.floor((s % 3600) / 60);
-    return h > 0 ? `${h}h ${m}m` : `${m}m ${Math.floor(s % 60)}s`;
-  }
-
   function updateStats(track: TrackData) {
     const s = track.stats;
     const fmt = (id: string, val: string) => {
@@ -2450,8 +2648,26 @@ export const ChartView = (() => {
     fmt('stat-distance', s.totalDist != null ? `${(s.totalDist / 1000).toFixed(1)} km` : '—');
     fmt('stat-duration', s.duration != null ? fmtSecs(Math.floor(s.duration / 1000)) : '—');
     fmt('stat-elevation', s.elevGain != null ? `${Math.round(s.elevGain)} m` : '—');
-    fmt('stat-avg-speed', s.avgSpeed != null ? `${(s.avgSpeed * 3.6).toFixed(1)} km/h` : '—');
-    fmt('stat-avg-power', s.avgPower != null ? `${s.avgPower} W` : '—');
+
+    // Recalculate averages from visible plot data to respect zero filtering
+    const getAvg = (key: string) => {
+      const p = plots.find((p) => p.metricKey === key);
+      if (!p) return null;
+      const incZero = metricsIncludingZero.has(key) || (key !== 'power' && key !== 'cadence' && key !== 'speed');
+      const vals = p.yData.filter((v): v is number => v != null && (incZero || v !== 0));
+      if (!vals.length) return null;
+      return vals.reduce((a, b) => a + b, 0) / vals.length;
+    };
+
+    const avgSpeed = getAvg('speed');
+    fmt('stat-avg-speed', avgSpeed != null ? `${(avgSpeed * 3.6).toFixed(1)} km/h` : '—');
+
+    const avgPower = getAvg('power');
+    fmt('stat-avg-power', avgPower != null ? `${Math.round(avgPower)} W` : '—');
+
+    const avgCadence = getAvg('cadence');
+    fmt('stat-avg-cad', avgCadence != null ? `${Math.round(avgCadence)} rpm` : '—');
+
     fmt('stat-avg-hr', s.avgHR != null ? `${s.avgHR} bpm` : '—');
   }
 
@@ -2466,13 +2682,34 @@ export const ChartView = (() => {
     clearSelectionStats,
     restoreSelection,
     resetZoom,
+    cancelSelection,
     setCursorAt: (idx: number) => {
-      plots.forEach(({ uplot: u }) =>
-        u.setCursor({ left: u.valToPos(plots[0].xData[idx]!, 'x'), top: 0 }),
-      );
+      pinnedPtIdx = idx;
+      if (onPinChangeCb) onPinChangeCb(idx);
+      plots.forEach(({ uplot: u, yData, xData }) => {
+        if (xData[idx] != null && yData[idx] != null) {
+          u.setCursor({ 
+            left: u.valToPos(xData[idx]!, 'x'), 
+            top: u.valToPos(yData[idx]!, 'y') 
+          });
+        }
+      });
+    },
+    setHoverAt: (idx: number | null) => {
+      plots.forEach(({ uplot: u, yData, xData }) => {
+        if (idx === null) {
+          u.setCursor({ left: -10, top: -10 });
+        } else if (xData[idx] != null && yData[idx] != null) {
+          u.setCursor({ 
+            left: u.valToPos(xData[idx]!, 'x'), 
+            top: u.valToPos(yData[idx]!, 'y') 
+          });
+        }
+      });
     },
     clearPinnedDot: () => {
       pinnedPtIdx = null;
+      if (onPinChangeCb) onPinChangeCb(null);
       plots.forEach(({ uplot: u }) => u.redraw(false));
     },
     resize,
@@ -2503,8 +2740,8 @@ export const ChartView = (() => {
 
   function drawMetricColorFill(
     u: uPlot,
-    xData: number[],
-    yData: number[],
+    xData: (number | null)[],
+    yData: (number | null)[],
     pts: TrackPoint[],
     metricKey: string,
   ) {
@@ -2518,25 +2755,216 @@ export const ChartView = (() => {
     ctx.rect(bb.left, bb.top, bb.width, bb.height);
     ctx.clip();
 
+    const isStepped = metricKey === 'gearRear' || metricKey === 'gearFront';
+
     for (let i = 1; i < xData.length; i++) {
       if (xData[i] == null || yData[i] == null || xData[i - 1] == null || yData[i - 1] == null)
         continue;
-      const x0 = u.valToPos(xData[i - 1], 'x', true);
-      const y0 = u.valToPos(yData[i - 1], 'y', true);
-      const x1 = u.valToPos(xData[i], 'x', true);
-      const y1 = u.valToPos(yData[i], 'y', true);
+      const x0 = u.valToPos(xData[i - 1]!, 'x', true);
+      const y0 = u.valToPos(yData[i - 1]!, 'y', true);
+      const x1 = u.valToPos(xData[i]!, 'x', true);
+      const y1 = u.valToPos(yData[i]!, 'y', true);
 
       const c = colors[i];
 
       // Top line segment
       ctx.beginPath();
       ctx.moveTo(x0, y0);
+      if (isStepped) {
+        ctx.lineTo(x1, y0);
+      }
       ctx.lineTo(x1, y1);
       ctx.strokeStyle = c;
-      ctx.lineWidth = 1.5 * dpr;
+      ctx.lineWidth = 2 * dpr;
       ctx.stroke();
     }
 
+    ctx.restore();
+  }
+
+  function drawBackgroundTracks(u: uPlot, metricKey: string, def: MetricDefinition) {
+    if (!allTracks.length) return;
+    const ctx = u.ctx;
+    const bb = u.bbox;
+    const dpr = window.devicePixelRatio || 1;
+    const GAP_THRESHOLD = 60000; // 1 minute in ms
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(bb.left, bb.top, bb.width, bb.height);
+    ctx.clip();
+
+    const isStepped = metricKey === 'gearRear' || metricKey === 'gearFront';
+
+    for (const track of allTracks) {
+      if (currentTrack && track.id === currentTrack.id) continue;
+
+      const pts = track.points;
+      const t0 = pts.find((p) => p.time != null)?.time || 0;
+      const field = def.field;
+
+      ctx.beginPath();
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)'; // Extremely faint
+      ctx.lineWidth = 1 * dpr;
+
+      let first = true;
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        const v = p[field] as number;
+        
+        if (v == null) {
+          first = true;
+          continue;
+        }
+
+        if (i > 0) {
+          const prev = pts[i - 1];
+          const dt = p.time && prev.time ? p.time - prev.time : 0;
+          if (dt > GAP_THRESHOLD) {
+            first = true;
+          }
+        }
+
+        const val = def.transform ? def.transform(v) : v;
+        const xVal = xAxis === 'distance' ? (p.dist || 0) / 1000 : (p.time! - t0) / 1000;
+        
+        // Skip if way outside horizontal range
+        if (xVal < u.scales.x!.min! - 10 || xVal > u.scales.x!.max! + 10) {
+          first = true;
+          continue;
+        }
+
+        const px = u.valToPos(xVal, 'x', true);
+        const py = u.valToPos(val, 'y', true);
+
+        if (first) {
+          ctx.moveTo(px, py);
+          first = false;
+        } else {
+          if (isStepped) {
+            const prevP = pts[i - 1];
+            const prevXVal =
+              xAxis === 'distance' ? (prevP.dist || 0) / 1000 : (prevP.time! - t0) / 1000;
+            ctx.lineTo(u.valToPos(prevXVal, 'x', true), py);
+          }
+          ctx.lineTo(px, py);
+        }
+      }
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+
+
+
+  function drawTrackPath(
+    u: uPlot,
+    xData: (number | null)[],
+    yData: (number | null)[],
+    color: string,
+    width: number,
+    metricKey: string,
+    range: [number, number] | null = null,
+    pts: TrackPoint[] = [],
+  ) {
+    const ctx = u.ctx;
+    const bb = u.bbox;
+    const dpr = window.devicePixelRatio || 1;
+    const GAP_THRESHOLD = 60000; // 1 minute in ms
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(bb.left, bb.top, bb.width, bb.height);
+    ctx.clip();
+
+    ctx.beginPath();
+    ctx.strokeStyle = hexToRgba(color, 0.8);
+    ctx.lineWidth = width * dpr;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+
+    const isStepped = metricKey === 'gearRear' || metricKey === 'gearFront';
+    let first = true;
+    let lastFrontGear: number | null = null;
+    let fMin = 1;
+    let fMax = 1;
+    
+    if (metricKey === 'gears' && pts.length > 0) {
+      const frontGears = pts.map(p => p.gearFrontTooth ?? p.gearFront).filter((v): v is number => v != null);
+      if (frontGears.length > 0) {
+        fMin = Math.min(...frontGears);
+        fMax = Math.max(...frontGears);
+      }
+    }
+
+    for (let i = 0; i < xData.length; i++) {
+      const xv = xData[i];
+      const yv = yData[i];
+      if (xv == null || yv == null) {
+        first = true;
+        continue;
+      }
+
+      if (metricKey === 'gears' && pts[i]) {
+        const fg = pts[i].gearFrontTooth ?? pts[i].gearFront;
+        if (fg != null && fg !== lastFrontGear) {
+          if (!first && i > 0) {
+            ctx.stroke();
+            ctx.beginPath();
+            const prevX = u.valToPos(xData[i-1]!, 'x', true);
+            const prevY = u.valToPos(yData[i-1]!, 'y', true);
+            ctx.moveTo(prevX, prevY);
+          }
+          
+          // Compute color
+          let segmentColor = color;
+          if (fMax !== fMin && fg != null) {
+            if (fg === fMin) {
+              segmentColor = '#FFC400'; // Small ring: Yellow-Orange
+            } else if (fg === fMax) {
+              segmentColor = '#FF8C00'; // Big ring: Dark Orange
+            } else {
+              segmentColor = '#FFA500'; // Middle ring: Orange
+            }
+          }
+          ctx.strokeStyle = hexToRgba(segmentColor, 0.8);
+          lastFrontGear = fg;
+        }
+      }
+
+      // Check gap
+      if (i > 0 && xAxis === 'time') {
+        const prevXv = xData[i - 1];
+        if (prevXv != null && xv - prevXv > GAP_THRESHOLD / 1000) {
+          first = true;
+        }
+      }
+
+      // Check range
+      if (range) {
+        if (xv < range[0] || xv > range[1]) {
+          first = true;
+          continue;
+        }
+      }
+
+      const px = u.valToPos(xv, 'x', true);
+      const py = u.valToPos(yv, 'y', true);
+
+      if (first) {
+        ctx.moveTo(px, py);
+        first = false;
+      } else {
+        if (isStepped) {
+          const prevXv = xData[i - 1]!;
+          ctx.lineTo(u.valToPos(prevXv, 'x', true), py);
+        }
+        ctx.lineTo(px, py);
+      }
+    }
+    ctx.stroke();
     ctx.restore();
   }
 })();

@@ -21,19 +21,39 @@ export const MapView = (() => {
   let onSelectCb: (id: string) => void;
   let onMoveCb: (lat: number, lng: number, zoom: number) => void;
   let onPointClickCb: (id: string, idx: number) => void;
+  let onPointHoverCb: (id: string | null, idx: number | null) => void;
   let onDblClickCb: () => void;
 
   const GAP_THRESHOLD: number = 60000; // 1 minute in ms
 
+  interface ImagerySource {
+    id: string;
+    name: string;
+    type: string;
+    url: string;
+    attribution?: { text?: string; url?: string };
+    max_zoom?: number;
+    extent?: {
+      min_lat?: number;
+      max_lat?: number;
+      min_lon?: number;
+      max_lon?: number;
+      polygon?: [number, number][][];
+    };
+    best?: boolean;
+    overlay?: boolean;
+  }
+
+  let imageryConfig: ImagerySource[] = [];
+  const extraLayers: Record<string, L.TileLayer> = {};
+  let currentExtraSearch = '';
+
   // Tile layers
   const LAYERS: Record<string, L.TileLayer> = {
-    swisstopo: L.tileLayer(
-      'https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-farbe/default/current/3857/{z}/{x}/{y}.jpeg',
-      {
-        attribution: '&copy; swisstopo',
-        maxZoom: 18,
-      },
-    ),
+    swisstopo: L.tileLayer('https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-farbe/default/current/3857/{z}/{x}/{y}.jpeg', {
+      attribution: '&copy; swisstopo',
+      maxZoom: 18,
+    }),
     opentopomap: L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenTopoMap contributors',
       maxZoom: 17,
@@ -49,15 +69,210 @@ export const MapView = (() => {
     ),
   };
 
+  async function fetchImageryConfig() {
+    try {
+      const resp = await fetch('./imagery.json');
+      if (!resp.ok) return;
+      const data = await resp.json();
+      // Filter out invalid layers or overlays
+      imageryConfig = data.filter((s: ImagerySource) => {
+        if (s.overlay) return false;
+        if (s.type === 'tms' || s.type === 'wmts') {
+          // Ensure we have a valid tile template
+          return s.url.includes('{z}') || s.url.includes('{x}') || s.url.includes('{y}');
+        }
+        return s.type === 'wms' || s.type === 'bing';
+      });
+      updateExtraLayersMenu();
+    } catch (e) {
+      console.error('MapView: Failed to fetch imagery config', e);
+    }
+  }
+
+  function updateExtraLayersMenu() {
+    const menuEl = document.getElementById('extra-layers-menu');
+    if (!menuEl) return;
+
+    const bounds = map.getBounds();
+    const sw = bounds.getSouthWest();
+    const ne = bounds.getNorthEast();
+
+    // Filter by extent if present AND by search query
+    const visible = imageryConfig
+      .filter((s) => {
+        // Search filter
+        if (currentExtraSearch) {
+          const q = currentExtraSearch.toLowerCase();
+          if (!s.name.toLowerCase().includes(q) && !s.id.toLowerCase().includes(q)) return false;
+          return true; // If searching, show all matches regardless of viewport
+        }
+
+        if (!s.extent) return true; // Global
+        const e = s.extent;
+
+        // Extract effective bounds from polygon if lat/lon direct bounds are missing
+        let minLat = e.min_lat,
+          maxLat = e.max_lat,
+          minLon = e.min_lon,
+          maxLon = e.max_lon;
+
+        if (minLat == null && e.polygon && e.polygon[0]) {
+          minLat = Infinity;
+          maxLat = -Infinity;
+          minLon = Infinity;
+          maxLon = -Infinity;
+          for (const pt of e.polygon[0]) {
+            minLon = Math.min(minLon, pt[0]);
+            maxLon = Math.max(maxLon, pt[0]);
+            minLat = Math.min(minLat, pt[1]);
+            maxLat = Math.max(maxLat, pt[1]);
+          }
+        }
+
+        // Intersection check: viewport bounds vs layer extent
+        if (minLat != null && ne.lat < minLat) return false;
+        if (maxLat != null && sw.lat > maxLat) return false;
+        if (minLon != null && ne.lng < minLon) return false;
+        if (maxLon != null && sw.lng > maxLon) return false;
+
+        return true;
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    menuEl.innerHTML = `
+      <div class="extra-layers-header">Additional Maps</div>
+      <div class="extra-layers-search">
+        <input type="text" id="extra-layers-search-input" placeholder="Search maps..." value="${currentExtraSearch}">
+      </div>
+      <div class="extra-layers-license">
+        Definitions from <a href="https://github.com/osmlab/editor-layer-index" target="_blank">iD Editor Index</a> (CC0)
+      </div>
+      <div class="extra-layer-list">
+        ${visible
+          .map(
+            (s) => `
+          <div class="extra-layer-row">
+            <button class="extra-layer-item" data-id="${s.id}" title="${s.name}">${s.name}</button>
+            <div class="extra-layer-attribution" title="${s.attribution?.text || ''}">${s.attribution?.text || 'No attribution'}</div>
+          </div>
+        `,
+          )
+          .join('')}
+      </div>
+    `;
+
+    const searchInput = menuEl.querySelector('#extra-layers-search-input') as HTMLInputElement;
+    // Don't focus automatically or it might be annoying on moveend
+    // But if we're clicking the menu button, we might want it.
+    
+    searchInput?.addEventListener('input', (e) => {
+      currentExtraSearch = (e.target as HTMLInputElement).value;
+      updateExtraLayersMenu();
+      // Re-focus after re-render
+      const newSearch = document.getElementById('extra-layers-search-input') as HTMLInputElement;
+      if (newSearch) {
+        newSearch.focus();
+        newSearch.setSelectionRange(newSearch.value.length, newSearch.value.length);
+      }
+    });
+    // Prevent menu close when clicking search
+    searchInput?.addEventListener('click', (e) => e.stopPropagation());
+
+    menuEl.querySelectorAll('.extra-layer-item').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = (btn as HTMLElement).dataset.id!;
+        const source = imageryConfig.find((s) => s.id === id);
+        if (source) switchExtraLayer(source);
+        menuEl.classList.add('hidden');
+      });
+    });
+  }
+
+  function switchExtraLayer(s: ImagerySource) {
+    // Handle Bing maps specially or skip if no key (Leaflet doesn't native Bing)
+    if (s.type === 'bing') {
+      console.warn('MapView: Bing maps require a plugin not currently loaded.');
+      return;
+    }
+
+    // Convert iD-style URL to Leaflet-style if needed
+    // iD uses {switch:a,b,c}, Leaflet uses {s}
+    let url = s.url.replace(/\{switch:([^}]+)\}/, '{s}');
+    const subdomains = s.url.match(/\{switch:([^}]+)\}/)?.[1]?.split(',') || 'abc';
+
+    let layer: L.TileLayer;
+
+    const hasBBox = url.includes('{bbox}');
+    const hasWidth = url.includes('{width}');
+    const hasProj = url.includes('{proj}');
+
+    // Normalize iD placeholders to something we can handle or just use as is if it's a template
+    url = url.replace(/{proj}/g, 'EPSG:3857')
+             .replace(/{width}/g, '256')
+             .replace(/{height}/g, '256')
+             .replace(/{zoom}/g, '{z}')
+             .replace(/{bbox}/g, '{bbox}');
+
+    // Handle WMS / WMTS or custom templates
+    if (s.type === 'wms' || hasBBox || hasWidth || hasProj) {
+
+      // Basic heuristic: if it's WMS but doesn't have a full template, try L.tileLayer.wms
+      if (s.type === 'wms' && !url.includes('{bbox}')) {
+        layer = L.tileLayer.wms(url, {
+          attribution: s.attribution?.text || '',
+          maxZoom: s.max_zoom || 20,
+        });
+      } else {
+        // Many iD "wms" are actually tile templates with {bbox}
+        layer = L.tileLayer(url, {
+          attribution: s.attribution?.text || '',
+          maxZoom: s.max_zoom || 20,
+          subdomains,
+        });
+      }
+    } else {
+      // Standard TMS/XYZ
+      layer = L.tileLayer(url, {
+        attribution: s.attribution?.text || '',
+        maxZoom: s.max_zoom || 20,
+        subdomains,
+      });
+    }
+
+    Object.values(LAYERS).forEach((l) => map.removeLayer(l));
+    Object.values(extraLayers).forEach((l) => map.removeLayer(l));
+
+    extraLayers[s.id] = layer;
+    let errorLogged = false;
+    layer.on('tileerror', (e) => {
+      if (!errorLogged) {
+        console.warn(`MapView: Tile error for layer ${s.id} (suppressing further errors)`, e);
+        errorLogged = true;
+      }
+    });
+    map.addLayer(layer);
+
+    const activeLabel = document.getElementById('selected-extra-map');
+    if (activeLabel) {
+      activeLabel.textContent = s.name;
+      activeLabel.classList.remove('hidden');
+    }
+
+    // Unselect defaults
+    document.querySelectorAll('.bm-btn').forEach((btn) => btn.classList.remove('active'));
+  }
+
   function init(
     onSelect: (id: string) => void,
     onMove: (lat: number, lng: number, zoom: number) => void,
     onPointClick: (id: string, idx: number) => void,
+    onPointHover: (id: string | null, idx: number | null) => void,
     onDblClick: () => void,
   ) {
     onSelectCb = onSelect;
     onMoveCb = onMove;
     onPointClickCb = onPointClick;
+    onPointHoverCb = onPointHover;
     onDblClickCb = onDblClick;
 
     map = L.map('map', {
@@ -69,17 +284,39 @@ export const MapView = (() => {
 
     L.control.zoom({ position: 'bottomright' }).addTo(map);
 
+    // Burger menu toggle
+    const burgerBtn = document.getElementById('btn-extra-layers');
+    const menuEl = document.getElementById('extra-layers-menu');
+    burgerBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      menuEl?.classList.toggle('hidden');
+      if (!menuEl?.classList.contains('hidden')) {
+        updateExtraLayersMenu();
+        const searchInput = document.getElementById('extra-layers-search-input') as HTMLInputElement;
+        searchInput?.focus();
+      }
+    });
+    document.addEventListener('click', () => menuEl?.classList.add('hidden'));
+    menuEl?.addEventListener('click', (e) => e.stopPropagation());
+
+    // ESC key to close
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        menuEl?.classList.add('hidden');
+      }
+    });
+
     // Create custom panes for strict layering
     // order (lowest to highest): 
     // 1. All tracks (default overlayPane, z-index 400)
-    // 2. Black outline for current track
-    // 3. White thick outline for selected interval
-    // 4. Color for current track
-    map.createPane('selectedOutlinePane');
-    map.getPane('selectedOutlinePane')!.style.zIndex = '410';
-    
+    // 2. White selection range outline (highlightPane)
+    // 3. Black outline for current track (selectedOutlinePane)
+    // 4. Color for current track (foregroundPane)
     map.createPane('highlightPane');
-    map.getPane('highlightPane')!.style.zIndex = '420';
+    map.getPane('highlightPane')!.style.zIndex = '410';
+
+    map.createPane('selectedOutlinePane');
+    map.getPane('selectedOutlinePane')!.style.zIndex = '420';
     
     map.createPane('foregroundPane');
     map.getPane('foregroundPane')!.style.zIndex = '430';
@@ -87,10 +324,44 @@ export const MapView = (() => {
     map.on('moveend', () => {
       const c = map.getCenter();
       onMoveCb(c.lat, c.lng, map.getZoom());
+      if (menuEl && !menuEl.classList.contains('hidden')) updateExtraLayersMenu();
     });
 
     map.on('dblclick', () => {
       onDblClickCb();
+    });
+
+    map.on('mousemove', (e: L.LeafletMouseEvent) => {
+      const tracksFound = findNearestTracks(e.latlng, 24);
+      if (tracksFound.length > 0) {
+        const nearest = tracksFound[0];
+        if (nearest.id === selectedId) {
+          onPointHoverCb(nearest.id, nearest.pointIdx);
+          return;
+        }
+      }
+      onPointHoverCb(null, null);
+    });
+
+    map.on('click', (e: L.LeafletMouseEvent) => {
+      const tracksFound = findNearestTracks(e.latlng);
+      if (tracksFound.length === 0) return;
+      
+      const nearest = tracksFound[0];
+
+      // If clicking on/near the ALREADY selected track, move the pinned point
+      if (nearest.id === selectedId && nearest.dist < 32) {
+        onPointClickCb(nearest.id, nearest.pointIdx);
+        return;
+      }
+
+      if (tracksFound.length === 1 && nearest.dist < 32) {
+        // If very close to exactly one track, just select it
+        onSelectCb(nearest.id);
+        return;
+      }
+
+      showTrackPickerPopup(e.latlng, tracksFound);
     });
 
     cursorMarker = L.marker([0, 0], {
@@ -102,12 +373,21 @@ export const MapView = (() => {
       }),
       interactive: false,
     });
+
+    fetchImageryConfig();
   }
 
   function switchBasemap(key: string) {
     if (!LAYERS[key]) return;
     Object.values(LAYERS).forEach((l) => map.removeLayer(l));
+    Object.values(extraLayers).forEach((l) => map.removeLayer(l));
     map.addLayer(LAYERS[key]);
+
+    const activeLabel = document.getElementById('selected-extra-map');
+    if (activeLabel) {
+      activeLabel.classList.add('hidden');
+      activeLabel.textContent = '';
+    }
   }
 
   function addTrack(track: TrackData, pane: string = 'overlayPane') {
@@ -129,7 +409,7 @@ export const MapView = (() => {
               L.polyline(currentSegment, { color: track.color, weight: 3, opacity: 0.2, pane }),
             );
           }
-          // Draw dotted line for gap
+          // Draw solid line for gap
           layers.push(
             L.polyline(
               [
@@ -137,10 +417,9 @@ export const MapView = (() => {
                 [p.lat, p.lon],
               ],
               {
-                color: track.color,
-                weight: 2,
-                opacity: 0.15,
-                dashArray: '5, 8',
+                color: '#888896',
+                weight: 3,
+                opacity: 1,
                 pane
               },
             ),
@@ -156,10 +435,93 @@ export const MapView = (() => {
 
     const group = L.featureGroup(layers).addTo(map);
     group.on('click', (e: L.LeafletMouseEvent) => {
-      L.DomEvent.stopPropagation(e);
-      if (onSelectCb) onSelectCb(track.id);
+      // Don't stopPropagation so map click listener also fires
     });
     polylines[track.id] = group;
+  }
+
+  function findNearestTracks(latlng: L.LatLng, maxPixelDist = 32): { id: string, name: string, color: string, dist: number, geoDist: number, pointIdx: number }[] {
+    const results: { id: string, name: string, color: string, dist: number, geoDist: number, pointIdx: number }[] = [];
+    const clickPoint = map.latLngToContainerPoint(latlng);
+
+    for (const id in trackData) {
+      if (!map.hasLayer(polylines[id])) continue;
+      const t = trackData[id];
+      let minDistPx = Infinity;
+      let minGeoDist = Infinity;
+      let pointIdx = -1;
+
+      // Quick bounds check with a pixel-based buffer
+      const bounds = polylines[id].getBounds();
+      const sw = map.latLngToContainerPoint(bounds.getSouthWest());
+      const ne = map.latLngToContainerPoint(bounds.getNorthEast());
+      
+      // Expand pixel bounds by maxPixelDist
+      if (clickPoint.x < sw.x - maxPixelDist || clickPoint.x > ne.x + maxPixelDist ||
+          clickPoint.y > sw.y + maxPixelDist || clickPoint.y < ne.y - maxPixelDist) {
+        continue;
+      }
+
+      // Find nearest point in track
+      for (let i = 0; i < t.points.length; i++) {
+        const p = t.points[i];
+        const pt = map.latLngToContainerPoint([p.lat, p.lon]);
+        const dpx = clickPoint.distanceTo(pt);
+        if (dpx < minDistPx) {
+          minDistPx = dpx;
+          minGeoDist = haversine(latlng.lat, latlng.lng, p.lat, p.lon);
+          pointIdx = i;
+        }
+        if (minDistPx < 5) break; // Optimization: close enough
+      }
+
+      if (minDistPx <= maxPixelDist) {
+        results.push({ id, name: t.name, color: t.color, dist: minDistPx, geoDist: minGeoDist, pointIdx });
+      }
+    }
+
+    return results.sort((a, b) => a.dist - b.dist);
+  }
+
+  function showTrackPickerPopup(latlng: L.LatLng, tracks: { id: string, name: string, color: string, geoDist: number }[]) {
+    const content = document.createElement('div');
+    content.className = 'track-picker-popup';
+    
+    const fmtGeoDist = (m: number) => {
+      if (m < 1000) return `${Math.round(m)}m away`;
+      return `${(m / 1000).toFixed(1)}km away`;
+    };
+
+    content.innerHTML = `
+      <div class="picker-header">Select track</div>
+      <div class="picker-list">
+        ${tracks.map(t => `
+          <div class="picker-item" data-id="${t.id}">
+            <div class="picker-color" style="background:${t.color}"></div>
+            <div class="picker-info">
+              <div class="picker-name">${t.name}</div>
+              <div class="picker-meta">${fmtGeoDist(t.geoDist)}</div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+
+    content.querySelectorAll('.picker-item').forEach(el => {
+      el.addEventListener('click', () => {
+        onSelectCb((el as HTMLElement).dataset.id!);
+        map.closePopup();
+      });
+    });
+
+    L.popup({
+      closeButton: false,
+      className: 'weg-popup',
+      maxWidth: 240,
+    })
+      .setLatLng(latlng)
+      .setContent(content)
+      .openOn(map);
   }
 
   function removeTrack(id: string) {
@@ -233,7 +595,16 @@ export const MapView = (() => {
     map.fitBounds(bounds.pad(0.15), { animate: true });
   }
 
+  function ensureVisible(latlngs: [number, number][]) {
+    if (!latlngs || latlngs.length < 2) return;
+    const bounds = L.latLngBounds(latlngs);
+    if (!map.getBounds().contains(bounds)) {
+      map.fitBounds(bounds.pad(0.2), { animate: true });
+    }
+  }
+
   // ── Chart-selection highlight segment ────────────────────────
+
   // pts: full points array, iMin/iMax: indices of visible range
   function highlightSegment(
     id: string,
@@ -245,6 +616,10 @@ export const MapView = (() => {
   ) {
     clearHighlight();
     if (!pts || iMin >= iMax) return;
+    
+    // If selecting full track, don't show the highlight
+    if (iMin === 0 && iMax >= pts.length - 1) return;
+
     const latlngs = pts.slice(iMin, iMax + 1).map((p) => [p.lat, p.lon] as [number, number]);
     if (latlngs.length < 2) return;
 
@@ -255,16 +630,18 @@ export const MapView = (() => {
     // Triple layer for maximum pronunciation: Black -> White -> Color
     const bgBlack = L.polyline(latlngs, {
       color: '#000000',
-      weight: 14,
+      weight: 13,
       opacity: 0.5,
       interactive: false,
+      pane: 'highlightPane',
     });
 
     const bgWhite = L.polyline(latlngs, {
       color: '#ffffff',
-      weight: 9,
+      weight: 11,
       opacity: 0.9,
       interactive: false,
+      pane: 'highlightPane',
     });
 
     // Inner segments: handle both metric coloring and gaps
@@ -285,10 +662,11 @@ export const MapView = (() => {
           ],
           {
             color: isGap ? '#888896' : c,
-            weight: 6,
+            weight: 4,
             opacity: 1,
             dashArray: isGap ? '4, 6' : undefined,
             interactive: false,
+            pane: 'foregroundPane',
           },
         ),
       );
@@ -312,8 +690,13 @@ export const MapView = (() => {
     const mStart = L.marker([pts[iMin].lat, pts[iMin].lon], {
       icon: startIcon,
       interactive: false,
+      pane: 'foregroundPane',
     });
-    const mEnd = L.marker([pts[iMax].lat, pts[iMax].lon], { icon: endIcon, interactive: false });
+    const mEnd = L.marker([pts[iMax].lat, pts[iMax].lon], {
+      icon: endIcon,
+      interactive: false,
+      pane: 'foregroundPane',
+    });
 
     // Group them on the highlightLine variable for easy removal
     highlightLine = L.featureGroup([bgBlack, bgWhite, inner, mStart, mEnd]).addTo(map);
@@ -377,17 +760,18 @@ export const MapView = (() => {
               [pts[i - 1].lat, pts[i - 1].lon],
               [pts[i].lat, pts[i].lon],
             ],
-            { color: '#888896', weight: 2, opacity: 0.5, dashArray: '4, 6', interactive: false },
+            { color: '#888896', weight: 4, opacity: 1, interactive: false, pane: 'foregroundPane' },
           ),
         );
       } else {
+
         segs.push(
           L.polyline(
             [
               [pts[i - 1].lat, pts[i - 1].lon],
               [pts[i].lat, pts[i].lon],
             ],
-            { color: c, weight: 4, opacity: 0.9, interactive: false },
+            { color: c, weight: 4, opacity: 0.9, interactive: false, pane: 'foregroundPane' },
           ),
         );
       }
@@ -437,6 +821,7 @@ export const MapView = (() => {
     hideCursor,
     highlightSegment,
     clearHighlight,
+    ensureVisible,
     centerOn,
     closePopup,
     invalidateSize,

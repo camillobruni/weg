@@ -18,7 +18,10 @@ export interface TrackPoint {
   temp: number | null;
   gearFront: number | null;
   gearRear: number | null;
+  gearFrontTooth: number | null;
+  gearRearTooth: number | null;
   battery: number | null;
+  gears: number | null;
   dist?: number;
   gradient?: number | null;
 }
@@ -63,8 +66,11 @@ export interface TrackData {
   id: string;
   name: string;
   fileName?: string;
+  fileSize?: number;
   device: string | null;
   devices?: DeviceInfo[];
+  sport?: string | null;
+  subSport?: string | null;
   format: 'gpx' | 'fit' | 'tcx' | 'kml';
   points: TrackPoint[];
   stats: TrackStats;
@@ -243,7 +249,9 @@ export const Parsers = (() => {
     return stats;
   }
 
-  const STANDARD_CURVE_DURATIONS = [1, 2, 5, 10, 20, 30, 60, 120, 300, 600, 1200, 1800, 3600, 7200, 10800];
+  const STANDARD_CURVE_DURATIONS = [
+    1, 2, 5, 10, 20, 30, 60, 120, 300, 600, 1200, 1800, 3600, 7200, 10800, 14400, 18000, 21600,
+  ];
 
   function calculateSlidingMax(data: number[], durations: number[]) {
     const curve: Record<number, { val: number; idx: number }> = {};
@@ -438,7 +446,10 @@ export const Parsers = (() => {
         temp,
         gearFront: null,
         gearRear: null,
+        gearFrontTooth: null,
+        gearRearTooth: null,
         battery: null,
+        gears: null,
       };
     });
 
@@ -537,14 +548,24 @@ export const Parsers = (() => {
           // Better device detection
           let device: string | null = null;
           const devices: DeviceInfo[] = [];
+          let sport: string | null = null;
+          let subSport: string | null = null;
 
-          const getDeviceName = (d: any) => d.product || d.product_name || d.garmin_product || d.device_type || d.manufacturer || null;
+          if (data.sports?.[0]) {
+            sport = data.sports[0].sport;
+            subSport = data.sports[0].sub_sport;
+          } else if (data.sessions?.[0]) {
+            sport = data.sessions[0].sport;
+            subSport = data.sessions[0].sub_sport;
+          }
+
+          const getDeviceName = (d: any) => d.product_name || d.garmin_product || d.product || d.device_type || d.manufacturer || null;
 
           if (data.file_ids?.[0]) {
             const fid = data.file_ids[0];
             device = getDeviceName(fid);
             devices.push({
-              name: fid.product || fid.product_name || fid.garmin_product,
+              name: fid.product_name || fid.garmin_product || fid.product,
               manufacturer: fid.manufacturer,
               serial: fid.serial_number ? String(fid.serial_number) : undefined,
               version: fid.software_version ? String(fid.software_version) : undefined,
@@ -558,10 +579,16 @@ export const Parsers = (() => {
               
               if (isMain) {
                 const name = getDeviceName(d);
-                if (!device) device = name;
+                // Prefer a name with product_name or garmin_product over generic ones
+                if (d.product_name || d.garmin_product || !device) {
+                  device = name;
+                }
+                
                 // Update existing main device if needed
                 if (devices.length > 0 && devices[0].type === 'main') {
-                  if (!devices[0].name) devices[0].name = d.product || d.product_name || d.garmin_product;
+                  if (d.product_name || d.garmin_product || !devices[0].name) {
+                    devices[0].name = d.product_name || d.garmin_product || d.product;
+                  }
                   if (!devices[0].manufacturer) devices[0].manufacturer = d.manufacturer;
                   if (!devices[0].serial && d.serial_number) devices[0].serial = String(d.serial_number);
                   if (!devices[0].version && d.software_version) devices[0].version = String(d.software_version);
@@ -571,7 +598,7 @@ export const Parsers = (() => {
               }
 
               devices.push({
-                name: d.product || d.product_name || d.garmin_product || d.device_type || 'Sensor',
+                name: d.product_name || d.garmin_product || d.product || d.device_type || 'Sensor',
                 manufacturer: d.manufacturer,
                 serial: d.serial_number ? String(d.serial_number) : undefined,
                 version: d.software_version ? String(d.software_version) : undefined,
@@ -580,7 +607,7 @@ export const Parsers = (() => {
                 batteryStatus: d.battery_status,
                 batteryVoltage: d.battery_voltage,
                 batteryLevel: d.battery_level,
-                sourceType: d.source_type,
+                sourceType: d.source_type != null ? String(d.source_type) : undefined,
               });
             });
           }
@@ -601,14 +628,14 @@ export const Parsers = (() => {
                 if (!existing.name) existing.name = name;
                 if (!existing.manufacturer) existing.manufacturer = s.manufacturer;
                 if (!existing.type) existing.type = s.sensor_type;
-                if (!existing.sourceType) existing.sourceType = s.connection_type;
+                if (!existing.sourceType) existing.sourceType = s.connection_type != null ? String(s.connection_type) : undefined;
               } else {
                 devices.push({
                   name: name,
                   manufacturer: s.manufacturer,
                   serial: antId,
                   type: s.sensor_type || 'sensor',
-                  sourceType: s.connection_type,
+                  sourceType: s.connection_type != null ? String(s.connection_type) : undefined,
                 });
               }
             });
@@ -629,9 +656,51 @@ export const Parsers = (() => {
             statusReports.sort((a, b) => a.time - b.time);
           }
 
+          // Collect gear events
+          const gearEvents: { time: number, front: number | null, rear: number | null, frontTooth: number | null, rearTooth: number | null }[] = [];
+          if (data.events) {
+            data.events.forEach((e: any) => {
+              let front = e.front_gear_num ?? e.front_gear ?? null;
+              let rear = e.rear_gear_num ?? e.rear_gear ?? null;
+              let frontTooth = e.front_gear_num_tooth ?? null;
+              let rearTooth = e.rear_gear_num_tooth ?? null;
+
+              if (e.event === 'rear_gear_change' || e.event === 'front_gear_change') {
+                const d = e.data;
+                if (d != null) {
+                  const ft = (d >> 24) & 0xFF;
+                  const fg = (d >> 16) & 0xFF;
+                  const rt = (d >> 8) & 0xFF;
+                  const rg = d & 0xFF;
+                  
+                  if (fg !== 0) front = fg;
+                  if (ft !== 0) frontTooth = ft;
+                  if (rg !== 0) rear = rg;
+                  if (rt !== 0) rearTooth = rt;
+                }
+              }
+
+              if (e.timestamp && (front != null || rear != null || frontTooth != null || rearTooth != null)) {
+                gearEvents.push({
+                  time: new Date(e.timestamp).getTime(),
+                  front,
+                  rear,
+                  frontTooth,
+                  rearTooth
+                });
+              }
+            });
+            gearEvents.sort((a, b) => a.time - b.time);
+          }
+
           const records = data.records || [];
           let lastBattery: number | null = null;
           let statusIdx = 0;
+          let lastFrontGear: number | null = null;
+          let lastRearGear: number | null = null;
+          let lastFrontTooth: number | null = null;
+          let lastRearTooth: number | null = null;
+          let gearIdx = 0;
 
           const points = records.map((r: any) => {
             const lat = r.position_lat;
@@ -655,6 +724,32 @@ export const Parsers = (() => {
               lastBattery = battery;
             }
 
+            // Update gear state from events
+            if (time) {
+              while (gearIdx < gearEvents.length && gearEvents[gearIdx].time <= time) {
+                const e = gearEvents[gearIdx];
+                if (e.front != null) lastFrontGear = e.front;
+                if (e.rear != null) lastRearGear = e.rear;
+                if (e.frontTooth != null) lastFrontTooth = e.frontTooth;
+                if (e.rearTooth != null) lastRearTooth = e.rearTooth;
+                gearIdx++;
+              }
+            }
+
+            const gearFront = r.front_gear_num ?? r.front_gear ?? lastFrontGear;
+            const gearRear = r.rear_gear_num ?? r.rear_gear ?? lastRearGear;
+            const gearFrontTooth = r.front_gear_num_tooth ?? lastFrontTooth;
+            const gearRearTooth = r.rear_gear_num_tooth ?? lastRearTooth;
+
+            if (r.front_gear_num != null || r.front_gear != null) lastFrontGear = gearFront;
+            if (r.rear_gear_num != null || r.rear_gear != null) lastRearGear = gearRear;
+            if (r.front_gear_num_tooth != null) lastFrontTooth = gearFrontTooth;
+            if (r.rear_gear_num_tooth != null) lastRearTooth = gearRearTooth;
+
+            const gears = (gearFrontTooth != null && gearRearTooth != null && gearRearTooth !== 0)
+              ? gearFrontTooth / gearRearTooth
+              : null;
+
             return {
               lat,
               lon,
@@ -665,9 +760,12 @@ export const Parsers = (() => {
               power: r.power ?? null,
               speed,
               temp: r.temperature ?? null,
-              gearFront: r.front_gear_num ?? null,
-              gearRear: r.rear_gear_num ?? null,
+              gearFront,
+              gearRear,
+              gearFrontTooth,
+              gearRearTooth,
               battery,
+              gears,
             } as TrackPoint;
           });
           const validPoints = points.filter((p: any): p is TrackPoint => p !== null);
@@ -679,7 +777,7 @@ export const Parsers = (() => {
 
           const pts = enrichPoints(validPoints);
           const stats = computeStats(pts);
-          resolve({ name, device, devices, format: 'fit', points: pts, stats });
+          resolve({ name, device, devices, format: 'fit', points: pts, stats, sport, subSport });
         } catch (ex) {
           reject(ex);
         }
@@ -722,7 +820,10 @@ export const Parsers = (() => {
           temp: null,
           gearFront: null,
           gearRear: null,
+          gearFrontTooth: null,
+          gearRearTooth: null,
           battery: null,
+          gears: null,
         });
       });
     });
@@ -737,18 +838,29 @@ export const Parsers = (() => {
   async function parseFile(file: File): Promise<any> {
     const ext = file.name.split('.').pop()?.toLowerCase();
     const buf = await file.arrayBuffer();
+    let result: any;
     switch (ext) {
       case 'gpx':
-        return parseGPX(buf);
+        result = parseGPX(buf);
+        break;
       case 'tcx':
-        return parseTCX(buf);
+        result = parseTCX(buf);
+        break;
       case 'fit':
-        return parseFIT(buf);
+        result = await parseFIT(buf);
+        break;
       case 'kml':
-        return parseKML(buf);
+        result = parseKML(buf);
+        break;
       default:
         throw new Error(`Unsupported format: .${ext}`);
     }
+    
+    if (result) {
+      result.fileName = file.name;
+      result.fileSize = file.size;
+    }
+    return result;
   }
 
   return {

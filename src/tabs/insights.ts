@@ -8,6 +8,7 @@ import uPlot from 'uplot';
 import { TrackData, Parsers } from '../parsers';
 import { Storage } from '../storage';
 import { MapView } from '../map';
+import { Zones } from '../zones.ts';
 import { ChartView } from '../charts';
 import { UrlState } from '../url-state';
 import { fmtSecs, escHtml, fmtDuration } from '../utils';
@@ -17,9 +18,14 @@ export function initInsights(showToast: (msg: string, type?: string) => void) {
   toastFn = showToast;
 }
 
-export function renderInsights(track: TrackData) {
+export function renderInsights(track: TrackData | null) {
   const container = document.getElementById('insights-view');
   if (!container) return;
+
+  if (!track) {
+    container.innerHTML = '';
+    return;
+  }
 
   const s = track.stats;
   if (!s.powerCurve && !s.hrZones && !s.hrCurve) {
@@ -74,38 +80,28 @@ export function renderInsights(track: TrackData) {
     const isMapColored = ChartView.getMapColorMetric() === metricKey;
 
     const totalTime = s.powerZones.reduce((a, b) => a + b, 0);
-    const ftp = Parsers.getFTP();
-    const zoneNames = [
-      'Active Recovery',
-      'Endurance',
-      'Tempo',
-      'Threshold',
-      'VO2 Max',
-      'Anaerobic',
-      'Neuromuscular',
-    ];
-    // Coggan % thresholds: 0, 55, 75, 90, 105, 120, 150
-    const thresholds = [0, 0.55, 0.75, 0.9, 1.05, 1.2, 1.5].map(t => Math.round(t * ftp));
-    const zoneColors = ['#82E0AA', '#A8C8A0', '#F7DC6F', '#F8C471', '#F39C12', '#E67E22', '#C0392B'];
+    const zones = Zones.getPowerZones();
 
     let zonesHtml = '';
     s.powerZones.forEach((time, i) => {
+      if (i >= zones.length) return;
+      const z = zones[i];
       const pct = totalTime > 0 ? (time / totalTime) * 100 : 0;
-      const rangeText = i < 6 
-        ? `${thresholds[i]} - ${thresholds[i+1]} W` 
-        : `> ${thresholds[i]} W`;
+      const rangeText = isFinite(z.max)
+        ? `${Math.round(z.min)} - ${Math.round(z.max)} W`
+        : `> ${Math.round(z.min)} W`;
 
       zonesHtml += `
         <div style="margin-bottom:12px">
           <div style="display:flex; align-items:baseline; font-size:12px; margin-bottom:4px; gap:8px">
             <span style="font-weight:800; color:var(--text); width:20px">Z${i+1}</span>
-            <span style="font-weight:600; color:var(--text-muted); flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${zoneNames[i]}</span>
+            <span style="font-weight:600; color:var(--text-muted); flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${z.name}</span>
             <span style="color:var(--text-dim); width:80px; text-align:right; font-size:11px">${rangeText}</span>
             <span style="color:var(--text); width:70px; text-align:right; font-variant-numeric: tabular-nums">${fmtSecs(Math.round(time))}</span>
             <span style="color:var(--text-dim); width:45px; text-align:right; font-variant-numeric: tabular-nums; font-size:11px">${pct.toFixed(1)}%</span>
           </div>
           <div style="height:8px; background:var(--surface); border-radius:4px; overflow:hidden">
-            <div style="height:100%; width:${pct}%; background:${zoneColors[i]}"></div>
+            <div style="height:100%; width:${pct}%; background:${z.color}"></div>
           </div>
         </div>
       `;
@@ -154,30 +150,28 @@ export function renderInsights(track: TrackData) {
     const isMapColored = ChartView.getMapColorMetric() === metricKey;
 
     const totalTime = s.hrZones.reduce((a, b) => a + b, 0);
-    const thresholds = Parsers.getHRZones();
-    const zoneNames = ['Recovery', 'Aerobic', 'Tempo', 'Threshold', 'Anaerobic'];
-    const zoneColors = ['#82E0AA', '#F7DC6F', '#F8C471', '#FF6B6B', '#C0392B'];
+    const zones = Zones.getHRZones();
 
     let zonesHtml = '';
     s.hrZones.forEach((time, i) => {
+      if (i >= zones.length) return;
+      const z = zones[i];
       const pct = totalTime > 0 ? (time / totalTime) * 100 : 0;
-      const rangeText = i === 0 
-        ? `< ${thresholds[0]} bpm` 
-        : i < 4 
-          ? `${thresholds[i-1]} - ${thresholds[i]} bpm` 
-          : `> ${thresholds[i-1]} bpm`;
+      const rangeText = isFinite(z.max)
+        ? `${Math.round(z.min)} - ${Math.round(z.max)} bpm`
+        : `> ${Math.round(z.min)} bpm`;
 
       zonesHtml += `
         <div style="margin-bottom:12px">
           <div style="display:flex; align-items:baseline; font-size:12px; margin-bottom:4px; gap:8px">
             <span style="font-weight:800; color:var(--text); width:20px">Z${i+1}</span>
-            <span style="font-weight:600; color:var(--text-muted); flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${zoneNames[i]}</span>
+            <span style="font-weight:600; color:var(--text-muted); flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${z.name}</span>
             <span style="color:var(--text-dim); width:95px; text-align:right; font-size:11px">${rangeText}</span>
             <span style="color:var(--text); width:70px; text-align:right; font-variant-numeric: tabular-nums">${fmtSecs(Math.round(time))}</span>
             <span style="color:var(--text-dim); width:45px; text-align:right; font-variant-numeric: tabular-nums; font-size:11px">${pct.toFixed(1)}%</span>
           </div>
           <div style="height:8px; background:var(--surface); border-radius:4px; overflow:hidden">
-            <div style="height:100%; width:${pct}%; background:${zoneColors[i]}"></div>
+            <div style="height:100%; width:${pct}%; background:${z.color}"></div>
           </div>
         </div>
       `;
@@ -476,6 +470,7 @@ function renderCurveCard(opts: CurveCardOptions) {
         ],
         setCursor: [
           (u: uPlot) => {
+            u.redraw(false);
             const idx = u.cursor.idx;
             const ctx = u.ctx;
             const dpr = window.devicePixelRatio || 1;

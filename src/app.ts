@@ -13,7 +13,8 @@ import { MapView } from './map';
 import { ChartView } from './charts';
 import { renderDetails, initDetails } from './tabs/details';
 import { renderInsights, initInsights } from './tabs/insights';
-import { fmtSecs, escHtml, fmtDate, getTagColor } from './utils';
+import { renderCombined, initCombined, resizeCombined } from './tabs/combined';
+import { fmtSecs, escHtml, fmtDate, getTagColor, compactId, shortRandom } from './utils';
 
 const TRACK_COLORS: string[] = [
   '#FF6B35',
@@ -30,9 +31,9 @@ const TRACK_COLORS: string[] = [
 const POINT_ZOOM_LEVEL = 16;
 
 let tracks: Record<string, TrackData> = {};
+let cancelProcessing = false;
 let selectedId: string | null = null;
 let colorIdx = 0;
-let currentUrlState = UrlState.get();
 let followDot = false;
 let currentMapColors: string[] | null = null;
 
@@ -47,6 +48,7 @@ interface Filters {
   dur: [number | null, number | null];
   metrics: Set<string>;
   tags: string[];
+  sport: string | null;
 }
 
 let filters: Filters = {
@@ -55,6 +57,7 @@ let filters: Filters = {
   dur: [null, null],
   metrics: new Set<string>(),
   tags: [],
+  sport: null,
 };
 
 function syncFiltersToUrl() {
@@ -99,7 +102,7 @@ function showSortMenu(anchorEl: HTMLElement) {
     `;
     item.addEventListener('click', () => {
       currentSort = opt.val;
-      UrlState.patch({ sort: currentSort });
+      UrlState.patch({ sort: opt.val });
       updateSearchSortUI();
       renderTrackList();
       popup.remove();
@@ -108,27 +111,17 @@ function showSortMenu(anchorEl: HTMLElement) {
   });
 
   const rect = anchorEl.getBoundingClientRect();
-  popup.style.cssText = `
-    position: fixed;
-    z-index: 10000;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 6px;
-    min-width: 180px;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
-    left: ${rect.left}px;
-    top: ${rect.bottom + 4}px;
-  `;
+  popup.style.top = `${rect.bottom + 5}px`;
+  popup.style.left = `${rect.left}px`;
   document.body.appendChild(popup);
 
-  const dismiss = (e: MouseEvent) => {
-    if (!popup.contains(e.target as Node) && e.target !== anchorEl) {
+  const close = (e: MouseEvent) => {
+    if (!popup.contains(e.target as Node) && !anchorEl.contains(e.target as Node)) {
       popup.remove();
-      document.removeEventListener('click', dismiss);
+      document.removeEventListener('click', close);
     }
   };
-  setTimeout(() => document.addEventListener('click', dismiss), 10);
+  setTimeout(() => document.addEventListener('click', close), 0);
 }
 
 function showMetricMenu(anchorEl: HTMLElement) {
@@ -138,66 +131,51 @@ function showMetricMenu(anchorEl: HTMLElement) {
   popup.className = 'metric-menu-popup';
 
   const metrics = ChartView.METRICS;
-  const activeMetrics = ChartView.getActiveMetrics?.() || new Set(['elevation', 'speed']);
-  const available = ChartView.getAvailableMetrics?.() || new Set(Object.keys(metrics));
+  const available = ChartView.getAvailableMetrics();
+  const active = ChartView.getActiveMetrics();
 
-  // Determine order: Active ones first (in their current order), then the rest
-  const sortedKeys = Array.from(activeMetrics);
-  Object.keys(metrics).forEach((k) => {
-    if (!activeMetrics.has(k)) sortedKeys.push(k);
-  });
-
-  sortedKeys.forEach((key) => {
-    const def = metrics[key];
-    const isAvailable = available.has(key);
-    const isActive = activeMetrics.has(key);
+  Object.entries(metrics).forEach(([key, def]) => {
+    if (!available.has(key)) return;
 
     const item = document.createElement('div');
-    item.className = `menu-item ${isActive ? 'active' : ''} ${isAvailable ? '' : 'disabled'}`;
+    item.className = `menu-item ${active.has(key) ? 'active' : ''}`;
     item.innerHTML = `
-      <span class="material-symbols-rounded">${def.icon}</span>
+      <span class="material-symbols-rounded" style="color:${def.color}">${def.icon}</span>
       <span class="item-label">${def.label}</span>
-      <span class="material-symbols-rounded check">${isActive ? 'check' : ''}</span>
+      <span class="material-symbols-rounded check">${active.has(key) ? 'check' : ''}</span>
     `;
-
-    if (isAvailable) {
-      item.addEventListener('click', () => {
-        ChartView.toggleMetric(key);
-        syncMetricsToUrl();
-        // Sync the main pill if it exists (hidden but should stay synced)
-        const mainPill = document.querySelector(`.metric-pill[data-metric="${key}"]`);
-        if (mainPill) mainPill.classList.toggle('active');
-        popup.remove();
-      });
-    }
+    item.addEventListener('click', () => {
+      ChartView.toggleMetric(key);
+      const isNowActive = ChartView.getActiveMetrics().has(key);
+      item.classList.toggle('active', isNowActive);
+      item.querySelector('.check')!.textContent = isNowActive ? 'check' : '';
+      
+      const pill = document.querySelector(`#metric-pills .metric-pill[data-metric="${key}"]`);
+      if (pill) {
+        pill.classList.toggle('active', isNowActive);
+      }
+      updateToolbarLayout();
+      
+      syncMetricsToUrl();
+    });
     popup.appendChild(item);
   });
 
   const rect = anchorEl.getBoundingClientRect();
-  popup.style.cssText = `
-    position: fixed;
-    z-index: 10000;
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 6px;
-    min-width: 160px;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
-    left: ${rect.left}px;
-    top: ${rect.bottom + 4}px;
-  `;
+  popup.style.top = `${rect.bottom + 5}px`;
+  popup.style.right = `${window.innerWidth - rect.right}px`;
   document.body.appendChild(popup);
 
-  const dismiss = (e: MouseEvent) => {
-    if (!popup.contains(e.target as Node) && e.target !== anchorEl) {
+  const close = (e: MouseEvent) => {
+    if (!popup.contains(e.target as Node) && !anchorEl.contains(e.target as Node)) {
       popup.remove();
-      document.removeEventListener('click', dismiss);
+      document.removeEventListener('click', close);
     }
   };
-  setTimeout(() => document.addEventListener('click', dismiss), 10);
+  setTimeout(() => document.addEventListener('click', close), 0);
 }
 
-// ── Tab Navigation ─────────────────────────────────────────────────
+// ── Tab Management ────────────────────────────────────────────────
 document.addEventListener('click', (e) => {
   const btn = (e.target as HTMLElement).closest('.tab-btn') as HTMLElement;
   if (!btn) return;
@@ -226,6 +204,10 @@ document.addEventListener('click', (e) => {
     renderInsights(tracks[selectedId]);
   }
 
+  if (btn.dataset.tab === 'combined' && selectedId && tracks[selectedId]) {
+    renderCombined(tracks[selectedId]);
+  }
+
   if (btn.dataset.tab === 'graphs') {
     ChartView.resize();
     updateToolbarLayout();
@@ -244,26 +226,40 @@ async function init() {
   const loaderText = document.getElementById('loader-text');
   const loaderSubtext = document.getElementById('loader-subtext');
   const progressBar = document.getElementById('loader-progress-bar') as HTMLElement;
+  const mapLoader = document.getElementById('map-loader');
+  const mapLoaderSpan = mapLoader?.querySelector('span');
 
-  if (loader) {
-    if (loaderText) loaderText.textContent = 'Loading database...';
-    if (loaderSubtext) loaderSubtext.textContent = '';
-    if (progressBar) progressBar.style.width = '0%';
-    loader.classList.remove('hidden');
+  if (mapLoader) {
+    if (mapLoaderSpan) mapLoaderSpan.textContent = 'Loading database...';
+    mapLoader.classList.remove('hidden');
   }
 
-  try {
-    const urlState = UrlState.get();
+  const urlState = UrlState.get();
 
-  initInsights(showToast);
+  initInsights((msg: string, type?: string) => showToast(msg, type === 'error' ? 'error' : 'info'));
   initDetails(() => {
     applyFilters();
     syncFiltersToUrl();
   });
+  initCombined();
 
   // Init sub-systems
-  MapView.init((id) => selectTrack(id), onMapMove, onMapPointClick, onMapDblClick);
-  ChartView.init(onChartCursorMove, onChartRangeChange, onChartClick);
+  MapView.init(
+    (id) => selectTrack(id), 
+    onMapMove, 
+    onMapPointClick, 
+    (id, idx) => {
+      if (id === selectedId) {
+        ChartView.setHoverAt(idx);
+      } else {
+        ChartView.setHoverAt(null);
+      }
+    },
+    onMapDblClick
+  );
+  ChartView.init(onChartCursorMove, onChartRangeChange, onChartClick, (idx) => {
+    UrlState.patch({ sel_point: idx });
+  });
 
   ChartView.setMapColorChangeCb((data) => {
     if (data) {
@@ -351,60 +347,77 @@ async function init() {
     const saved = await Storage.getAll();
     saved.sort((a, b) => a.addedAt - b.addedAt);
 
-    if (loaderText) loaderText.textContent = `Loading ${saved.length} tracks...`;
+    if (mapLoaderSpan) mapLoaderSpan.textContent = `Preparing ${saved.length} tracks...`;
 
-    for (let i = 0; i < saved.length; i++) {
-      const t = saved[i];
-      if (loaderSubtext) loaderSubtext.textContent = t.name;
-      if (progressBar) progressBar.style.width = `${(i / saved.length) * 100}%`;
-
-      // Migration: re-calculate stats if new insights are missing or old format
-      const powerCurveEntries = t.stats.powerCurve ? Object.values(t.stats.powerCurve) : [];
-
-      // Check if points need re-enrichment (e.g. missing calculated speed or gradient)
-      const needsEnrich = t.points.length > 1 && 
-        (t.points[1].speed === undefined || t.points[1].gradient === undefined);
-
-      const needsRecalc = 
-        needsEnrich ||
-        (!t.stats.powerCurve || !t.stats.hrZones || !t.stats.hrCurve || t.stats.shifts === undefined || t.stats.avgBattery === undefined) ||
-        (powerCurveEntries.length > 0 && typeof (powerCurveEntries[0] as any) === 'number');
-
-      if (needsRecalc) {
-        if (needsEnrich) t.points = Parsers.enrichPoints(t.points);
-        t.stats = Parsers.computeStats(t.points);
-        await Storage.save(t);
-      }
+    saved.forEach(t => {
       tracks[t.id] = t;
-      colorIdx = Math.max(colorIdx, TRACK_COLORS.indexOf(t.color) + 1);
-      MapView.addTrack(t);
-    }
-    applyFilters(); // Filter and render list/map
+    });
+    applyFilters();
 
-    // Only fit all if no saved map position
-    if (saved.length && !urlState.map_pos) MapView.fitAll();
+    const restoreId = urlState.track && saved.find(t => t.id === urlState.track) 
+      ? urlState.track 
+      : (saved.length > 0 ? saved[0].id : null);
 
-    // ── RESTORE SELECTION ─────────────────────────────────────────
-    // Must happen AFTER tracks are loaded into the global 'tracks' object
-    const savedIds = Object.keys(tracks);
-    const restoreId =
-      urlState.track && tracks[urlState.track]
-        ? urlState.track
-        : savedIds.length > 0
-          ? savedIds[0]
-          : null;
+    const mapLoader = document.getElementById('map-loader');
 
-    if (restoreId) {
-      selectTrack(restoreId, !urlState.map_pos);
-
-      if (urlState.sel) {
-        const [xMin, xMax] = urlState.sel;
+    // 1. Process and load the "Priority" track first
+    const selectedTrackData = saved.find(t => t.id === restoreId);
+    if (selectedTrackData) {
+      await processAndLoadTrack(selectedTrackData);
+      selectTrack(selectedTrackData.id, !urlState.map_pos);
+      
+      // Explicitly restore selection/pin from URL if they exist
+      if (urlState.sel && Array.isArray(urlState.sel) && urlState.sel.length === 2) {
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            ChartView.restoreSelection(xMin, xMax);
+            ChartView.restoreSelection(urlState.sel![0], urlState.sel![1]);
           });
         });
       }
+      if (urlState.sel_point !== undefined && urlState.sel_point !== null) {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            ChartView.setCursorAt(urlState.sel_point!);
+          });
+        });
+      }
+    }
+
+    // Hide database loader
+    if (mapLoader) mapLoader.classList.add('hidden');
+
+    // 2. Load the rest in background chunks
+    if (saved.length > (selectedTrackData ? 1 : 0)) {
+      if (mapLoader) {
+        if (mapLoaderSpan) mapLoaderSpan.textContent = 'Loading tracks...';
+        mapLoader.classList.remove('hidden');
+      }
+      
+      const remaining = saved.filter(t => t.id !== restoreId);
+      let index = 0;
+      
+      const loadNextChunk = async () => {
+        const chunkSize = 2; // Process 2 tracks per frame
+        const end = Math.min(index + chunkSize, remaining.length);
+        
+        for (; index < end; index++) {
+          await processAndLoadTrack(remaining[index]);
+        }
+        
+        if (index < remaining.length) {
+          requestAnimationFrame(loadNextChunk);
+        } else {
+          if (mapLoader) mapLoader.classList.add('hidden');
+          applyFilters(); // Final sync
+          // Only fit all if no saved map position and we just finished loading everything
+          if (saved.length && !urlState.map_pos) MapView.fitAll();
+        }
+      };
+      
+      requestAnimationFrame(loadNextChunk);
+    } else {
+      applyFilters();
+      if (saved.length && !urlState.map_pos) MapView.fitAll();
     }
   } catch (e) {
     console.warn('Could not load saved tracks:', e);
@@ -546,6 +559,40 @@ async function init() {
     .getElementById('filter-dur-max')
     ?.addEventListener('input', (e) => onFilterInput('dur', 1, e));
 
+  const burgerBtn = document.getElementById('sport-burger-btn');
+  const dropdownContent = document.getElementById('sport-dropdown-content');
+  burgerBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (dropdownContent) {
+      const isVisible = dropdownContent.style.display === 'block';
+      dropdownContent.style.display = isVisible ? 'none' : 'block';
+    }
+  });
+  
+  document.addEventListener('click', (e) => {
+    if (dropdownContent && dropdownContent.style.display === 'block') {
+      if (!dropdownContent.contains(e.target as Node) && e.target !== burgerBtn) {
+        dropdownContent.style.display = 'none';
+      }
+    }
+  });
+
+  document.getElementById('sport-filter-container')?.addEventListener('click', (e) => {
+    const target = e.target as HTMLElement;
+    const btn = target.closest('[data-sport]');
+    if (btn) {
+      const selectedSport = (btn as HTMLElement).dataset.sport || null;
+      filters.sport = filters.sport === selectedSport ? null : selectedSport;
+      applyFilters();
+      syncFiltersToUrl();
+      updateFilterUI();
+      
+      if (target.closest('.dropdown-item')) {
+        if (dropdownContent) dropdownContent.style.display = 'none';
+      }
+    }
+  });
+
   document.getElementById('filter-metrics')?.addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest('.mini-pill') as HTMLElement;
     if (!btn) return;
@@ -558,7 +605,7 @@ async function init() {
   });
 
   document.getElementById('btn-reset-filters')?.addEventListener('click', () => {
-    filters = { date: [null, null], dist: [null, null], dur: [null, null], metrics: new Set(), tags: [] };
+    filters = { date: [null, null], dist: [null, null], dur: [null, null], metrics: new Set(), tags: [], sport: null };
     updateFilterUI();
     applyFilters();
     syncFiltersToUrl();
@@ -576,22 +623,46 @@ async function init() {
     if (e.key === 'Escape') {
       MapView.hideCursor();
       MapView.closePopup?.();
-      // Dismiss popups
+      // Dismiss popups and modals
       document
-        .querySelectorAll('.color-picker-popup, .metric-menu-popup, .sort-menu-popup')
+        .querySelectorAll('.color-picker-popup, .metric-menu-popup, .sort-menu-popup, .modal-backdrop')
         .forEach((el) => el.remove());
     }
   });
 
   // Resize charts when window changes
-    window.addEventListener('resize', () => {
-      ChartView.resize();
-      MapView.invalidateSize?.();
-      updateToolbarLayout();
-    });
-  } finally {
-    if (loader) loader.classList.add('hidden');
+  window.addEventListener('resize', () => {
+    ChartView.resize();
+    resizeCombined();
+    MapView.invalidateSize?.();
+    updateToolbarLayout();
+  });
+}
+
+async function processAndLoadTrack(t: TrackData) {
+  // Migration: re-calculate stats if new insights are missing or old format
+  const powerCurveEntries = t.stats.powerCurve ? Object.values(t.stats.powerCurve) : [];
+
+  const needsEnrich = t.points.length > 1 && 
+    (t.points[1].speed === undefined || t.points[1].gradient === undefined);
+
+  const needsRecalc = 
+    needsEnrich ||
+    (!t.stats.powerCurve || !t.stats.hrZones || !t.stats.hrCurve || t.stats.shifts === undefined || t.stats.avgBattery === undefined) ||
+    (powerCurveEntries.length > 0 && typeof (powerCurveEntries[0] as any) === 'number') ||
+    ((t.stats.duration || 0) > 10800 * 1000 && t.stats.powerCurve && !t.stats.powerCurve[14400]);
+
+  if (needsRecalc) {
+    if (needsEnrich) t.points = Parsers.enrichPoints(t.points);
+    t.stats = Parsers.computeStats(t.points);
+    await Storage.save(t);
   }
+  
+  tracks[t.id] = t;
+  colorIdx = Math.max(colorIdx, TRACK_COLORS.indexOf(t.color) + 1);
+  MapView.addTrack(t);
+  MapView.setTrackVisible(t.id, t.visible && !t._filtered);
+  renderTrackList(); // Progressive list update
 }
 
 function initResizeHandle() {
@@ -599,38 +670,27 @@ function initResizeHandle() {
   const panel = document.getElementById('chart-panel');
   if (!handle || !panel) return;
 
-  let startY: number, startH: number;
+  let isDragging = false;
 
-  const onMove = (e: MouseEvent | TouchEvent) => {
-    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-    const diff = startY - clientY;
-    const newHeight = Math.max(100, Math.min(window.innerHeight - 100, startH + diff));
-    panel.style.height = `${newHeight}px`;
-    ChartView.resize();
-  };
-
-  const onUp = () => {
-    document.body.classList.remove('dragging-resizer');
-    document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onUp);
-    document.removeEventListener('touchmove', onMove);
-    document.removeEventListener('touchend', onUp);
-  };
-
-  handle.addEventListener('mousedown', (e) => {
-    startY = e.clientY;
-    startH = panel.offsetHeight;
-    document.body.classList.add('dragging-resizer');
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+  handle.addEventListener('mousedown', () => {
+    isDragging = true;
+    document.body.style.cursor = 'ns-resize';
   });
 
-  handle.addEventListener('touchstart', (e) => {
-    startY = e.touches[0].clientY;
-    startH = panel.offsetHeight;
-    document.body.classList.add('dragging-resizer');
-    document.addEventListener('touchmove', onMove);
-    document.addEventListener('touchend', onUp);
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    const h = window.innerHeight - e.clientY;
+    const clampedH = Math.max(100, Math.min(window.innerHeight - 100, h));
+    panel.style.height = `${clampedH}px`;
+    ChartView.resize();
+    resizeCombined();
+    MapView.invalidateSize?.();
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!isDragging) return;
+    isDragging = false;
+    document.body.style.cursor = '';
   });
 }
 
@@ -639,62 +699,230 @@ function initSidebarResizer() {
   const sidebar = document.getElementById('sidebar');
   if (!resizer || !sidebar) return;
 
-  let startX: number, startW: number;
+  let isDragging = false;
 
-  const onMove = (e: MouseEvent | TouchEvent) => {
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const newWidth = Math.max(150, Math.min(600, startW + (clientX - startX)));
-    document.documentElement.style.setProperty('--sidebar-w', `${newWidth}px`);
-
-    // Invalidate sub-view sizes as container changes
-    MapView.invalidateSize();
-    ChartView.resize();
-    updateToolbarLayout();
-  };
-
-  const onUp = () => {
-    resizer.classList.remove('dragging');
-    document.body.classList.remove('dragging-sidebar');
-    document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onUp);
-    document.removeEventListener('touchmove', onMove);
-    document.removeEventListener('touchend', onUp);
-  };
-
-  resizer.addEventListener('mousedown', (e) => {
-    startX = e.clientX;
-    startW = sidebar.offsetWidth;
+  resizer.addEventListener('mousedown', () => {
+    isDragging = true;
     resizer.classList.add('dragging');
     document.body.classList.add('dragging-sidebar');
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
   });
 
-  resizer.addEventListener('touchstart', (e) => {
-    startX = e.touches[0].clientX;
-    startW = sidebar.offsetWidth;
-    resizer.classList.add('dragging');
-    document.body.classList.add('dragging-sidebar');
-    document.addEventListener('touchmove', onMove);
-    document.addEventListener('touchend', onUp);
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    const w = e.clientX;
+    const clampedW = Math.max(200, Math.min(600, w));
+    sidebar.style.width = `${clampedW}px`;
+    sidebar.style.setProperty('--sidebar-w', `${clampedW}px`);
+    ChartView.resize();
+    MapView.invalidateSize?.();
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!isDragging) return;
+    isDragging = false;
+    resizer.classList.remove('dragging');
+    document.body.classList.remove('dragging-sidebar');
+  });
+}
+
+// ── Event Handlers ──────────────────────────────────────────────
+
+function onMapMove(lat: number, lng: number, zoom: number) {
+  UrlState.patch({ map_pos: [lat, lng, zoom] });
+}
+
+function onMapPointClick(id: string, idx: number) {
+  selectTrack(id, false);
+  ChartView.setCursorAt(idx);
+}
+
+function onMapDblClick() {
+  // MapView.fitAll();
+}
+
+function onChartCursorMove(pt: TrackPoint | null) {
+  if (pt && pt.lat != null && pt.lon != null) {
+    MapView.showCursorAt(pt.lat, pt.lon);
+    if (followDot) {
+      MapView.centerOn(pt.lat, pt.lon, null, true);
+    }
+  } else {
+    MapView.hideCursor();
+  }
+}
+
+function onChartRangeChange(min: number | null, max: number | null, axis: string) {
+  if (!selectedId || !tracks[selectedId]) return;
+  const t = tracks[selectedId];
+
+  if (min === null || max === null) {
+    MapView.clearHighlight();
+    if (t) renderInsights(t);
+    UrlState.patch({ sel: null });
+    return;
+  }
+
+  // Find point indices
+  const pts = t.points;
+  let iMin = 0, iMax = pts.length - 1;
+
+  if (axis === 'distance') {
+    const d0 = min * 1000, d1 = max * 1000;
+    iMin = pts.findIndex(p => (p.dist || 0) >= d0);
+    iMax = pts.findIndex(p => (p.dist || 0) >= d1);
+  } else {
+    const t0 = (pts.find(p => p.time != null)?.time || 0);
+    const ts0 = t0 + min * 1000, ts1 = t0 + max * 1000;
+    iMin = pts.findIndex(p => (p.time || 0) >= ts0);
+    iMax = pts.findIndex(p => (p.time || 0) >= ts1);
+  }
+
+  if (iMin === -1) iMin = 0;
+  if (iMax === -1) iMax = pts.length - 1;
+
+  // Compute selection stats
+  const selPts = pts.slice(iMin, iMax + 1);
+  const stats = Parsers.computeStats(selPts);
+  ChartView.setSelectionStats(stats);
+  renderInsights(t);
+
+  MapView.highlightSegment(selectedId, pts, iMin, iMax, false, currentMapColors);
+  MapView.ensureVisible(selPts.map(p => [p.lat, p.lon] as [number, number]));
+  UrlState.patch({ sel: [min, max] });
+}
+
+function onChartClick(pt: TrackPoint, idx: number) {
+  if (pt && pt.lat != null && pt.lon != null) {
+    MapView.centerOn(pt.lat, pt.lon, POINT_ZOOM_LEVEL);
+  }
+}
+
+function selectTrack(id: string, fit = true) {
+  if (!tracks[id]) return;
+  if (id === selectedId) {
+    if (fit) MapView.fitTrack(id);
+    return;
+  }
+
+  // Clear current views immediately before loading new data
+  ChartView.clear();
+  renderDetails(null, []);
+  renderInsights(null);
+
+  selectedId = id;
+
+  // Fully reset metric coloring when switching tracks
+  currentMapColors = null;
+  MapView.clearMetricColor(id);
+  ChartView.toggleMapColor(null); // Ensure ChartView state also resets
+
+  // Clear selection on new track
+  UrlState.patch({ track: id, sel: null });
+  ChartView.cancelSelection();
+
+  // Update UI immediately
+  renderTrackList();
+
+  // Render details
+  const activeTabBtn = document.querySelector('.tab-btn.active') as HTMLElement;
+  const activeTab = activeTabBtn ? activeTabBtn.dataset.tab : 'graphs';
+  if (activeTab === 'details') renderDetails(tracks[id], getGlobalTags());
+  if (activeTab === 'insights') renderInsights(tracks[id]);
+  if (activeTab === 'combined') renderCombined(tracks[id]);
+
+  // Tell sub-views
+  MapView.setSelectedTrack(id, fit);
+  if (fit) MapView.fitTrack(id);
+  ChartView.loadTrack(tracks[id], Object.values(tracks));
+}
+
+async function deleteTrack(id: string) {
+  await Storage.remove(id);
+  MapView.removeTrack(id);
+  delete tracks[id];
+  if (selectedId === id) {
+    selectedId = null;
+    ChartView.clear();
+    renderDetails(null, []);
+    renderInsights(null);
+    UrlState.patch({ track: null, sel: null, sel_point: null });
+  }
+  applyFilters();
+}
+
+async function clearAll() {
+  const code = Math.floor(10 + Math.random() * 90).toString();
+  
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  
+  backdrop.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-title">Delete all tracks?</div>
+      <div class="modal-body">
+        This will permanently remove all tracks from your browser storage. This action cannot be undone.
+      </div>
+      <div class="modal-input-wrap">
+        <div class="modal-input-label">Enter "${code}" to confirm:</div>
+        <input type="text" class="modal-input" maxlength="2" placeholder="--">
+      </div>
+      <div class="modal-actions">
+        <button class="modal-btn cancel">Cancel</button>
+        <button class="modal-btn confirm" disabled>Delete All</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(backdrop);
+
+  const input = backdrop.querySelector('.modal-input') as HTMLInputElement;
+  const btnConfirm = backdrop.querySelector('.modal-btn.confirm') as HTMLButtonElement;
+  const btnCancel = backdrop.querySelector('.modal-btn.cancel') as HTMLButtonElement;
+
+  input.focus();
+
+  input.addEventListener('input', () => {
+    btnConfirm.disabled = input.value !== code;
+  });
+
+  const close = () => backdrop.remove();
+
+  btnCancel.addEventListener('click', close);
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) close();
+  });
+
+  btnConfirm.addEventListener('click', async () => {
+    if (input.value !== code) return;
+    close();
+    
+    cancelProcessing = true;
+    await Storage.clear();
+    localStorage.clear();
+    
+    tracks = {};
+    selectedId = null;
+    MapView.clearHighlight();
+    window.location.reload();
   });
 }
 
 function applyFilters() {
-  const query = searchQuery.toLowerCase();
-  const regex = searchRegex ? new RegExp(searchQuery, 'i') : null;
-
-  Object.values(tracks).forEach((t) => {
+  const ids = Object.keys(tracks);
+  ids.forEach((id) => {
+    const t = tracks[id];
     const s = t.stats;
-
     let visible = true;
 
-    // Search filter
+    // Search query
     if (searchQuery) {
-      if (regex) {
-        if (!regex.test(t.name)) visible = false;
+      if (searchRegex) {
+        try {
+          const re = new RegExp(searchQuery, 'i');
+          if (!re.test(t.name)) visible = false;
+        } catch(e) { visible = false; }
       } else {
-        if (!t.name.toLowerCase().includes(query)) visible = false;
+        if (!t.name.toLowerCase().includes(searchQuery.toLowerCase())) visible = false;
       }
     }
 
@@ -732,6 +960,11 @@ function applyFilters() {
       }
     }
 
+    // Sport filter
+    if (visible && filters.sport) {
+      if (t.sport !== filters.sport) visible = false;
+    }
+
     // Tags filter
     if (visible && filters.tags.length > 0) {
       const trackTags = t.tags || [];
@@ -758,6 +991,11 @@ function updateFilterUI() {
     filters.dur[1] !== null ? String(filters.dur[1]) : '';
   (document.getElementById('filter-tags') as HTMLInputElement).value =
     filters.tags.join(', ');
+
+  document.querySelectorAll('#sport-filter-container .mini-pill, #sport-dropdown-content .dropdown-item').forEach((el) => {
+    const item = el as HTMLElement;
+    item.classList.toggle('active', (item.dataset.sport || '') === (filters.sport || ''));
+  });
 
   document.querySelectorAll('#filter-metrics .mini-pill').forEach((el) => {
     const btn = el as HTMLElement;
@@ -795,7 +1033,72 @@ function updateSearchSortUI() {
   }
 }
 
+function updateSportFilterOptions() {
+  const container = document.getElementById('sport-filter-container');
+  if (!container) return;
+  
+  const commonContainer = document.getElementById('common-sports');
+  const dropdownContent = document.getElementById('sport-dropdown-content');
+  if (!commonContainer || !dropdownContent) return;
+
+  const sports = new Set<string>();
+  Object.values(tracks).forEach(t => {
+    if (t.sport) sports.add(t.sport);
+  });
+
+  const sportsArray = Array.from(sports).sort();
+  const burgerDropdown = document.getElementById('sport-burger-dropdown');
+  
+  commonContainer.innerHTML = '';
+  dropdownContent.innerHTML = '';
+  
+  if (sportsArray.length <= 4) {
+    if (burgerDropdown) burgerDropdown.style.display = 'none';
+    
+    sportsArray.forEach(sport => {
+      const btn = document.createElement('button');
+      btn.className = 'mini-pill' + (filters.sport === sport ? ' active' : '');
+      btn.dataset.sport = sport;
+      btn.title = sport.charAt(0).toUpperCase() + sport.slice(1);
+      btn.innerHTML = `<span class="material-symbols-rounded">${getSportIcon(sport)}</span>`;
+      commonContainer.appendChild(btn);
+    });
+  } else {
+    if (burgerDropdown) burgerDropdown.style.display = 'inline-block';
+    
+    const commonSports = ['running', 'cycling', 'walking'];
+    
+    commonSports.forEach(sport => {
+      if (sports.has(sport)) {
+        const btn = document.createElement('button');
+        btn.className = 'mini-pill' + (filters.sport === sport ? ' active' : '');
+        btn.dataset.sport = sport;
+        btn.title = sport.charAt(0).toUpperCase() + sport.slice(1);
+        btn.innerHTML = `<span class="material-symbols-rounded">${getSportIcon(sport)}</span>`;
+        commonContainer.appendChild(btn);
+      }
+    });
+    
+    sportsArray.forEach(sport => {
+      const item = document.createElement('div');
+      item.className = 'dropdown-item' + (filters.sport === sport ? ' active' : '');
+      item.dataset.sport = sport;
+      item.style.padding = '8px';
+      item.style.cursor = 'pointer';
+      item.style.display = 'flex';
+      item.style.alignItems = 'center';
+      item.style.gap = '8px';
+      item.innerHTML = `
+        <span class="material-symbols-rounded">${getSportIcon(sport)}</span>
+        <span>${sport.charAt(0).toUpperCase() + sport.slice(1)}</span>
+      `;
+      dropdownContent.appendChild(item);
+    });
+  }
+}
+
 function renderTrackList() {
+  updateSportFilterOptions();
   const list = document.getElementById('track-list');
   const emptyEl = document.getElementById('track-list-empty') as HTMLElement;
   const headerLabel = document.querySelector('.section-label');
@@ -858,6 +1161,17 @@ function getGlobalTags(): string[] {
   return Array.from(all).sort();
 }
 
+function getSportIcon(sport: string | null): string {
+  if (!sport) return 'category';
+  const s = sport.toLowerCase();
+  if (s.includes('run')) return 'directions_run';
+  if (s.includes('cycl') || s.includes('bike')) return 'directions_bike';
+  if (s.includes('walk')) return 'directions_walk';
+  if (s.includes('swim')) return 'pool';
+  if (s.includes('hik')) return 'hiking';
+  return 'sports';
+}
+
 function buildTrackItem(track: TrackData) {
   const item = document.createElement('div');
   item.className = 'track-item' + (track.id === selectedId ? ' selected' : '');
@@ -882,6 +1196,7 @@ function buildTrackItem(track: TrackData) {
       <div class="track-meta">
         <span>${date}</span>
         <span>${(track.stats.totalDist / 1000).toFixed(1)} km</span>
+        ${track.sport ? `<span class="material-symbols-rounded sport-icon" title="${escHtml(track.sport)}">${getSportIcon(track.sport)}</span>` : ''}
         <span class="badge">${track.format.toUpperCase()}</span>
       </div>
       ${tagsHtml}
@@ -899,99 +1214,56 @@ function buildTrackItem(track: TrackData) {
     selectTrack(track.id);
   });
 
-  item.querySelector('.toggle-vis')?.addEventListener('click', (e) => {
-    e.stopPropagation();
+  const btnVis = item.querySelector('.toggle-vis') as HTMLElement;
+  btnVis.addEventListener('click', () => {
     track.visible = !track.visible;
+    btnVis.querySelector('.material-symbols-rounded')!.textContent = track.visible
+      ? 'visibility'
+      : 'visibility_off';
     MapView.setTrackVisible(track.id, track.visible);
-    renderTrackList();
+    Storage.save(track);
   });
 
-  item.querySelector('.delete-track')?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    deleteTrack(track.id);
+  item.querySelector('.delete-track')?.addEventListener('click', () => {
+    if (confirm(`Remove "${track.name}"?`)) {
+      deleteTrack(track.id);
+    }
   });
 
   return item;
 }
 
-// ── Track actions ─────────────────────────────────────────────────
-function selectTrack(id: string, fit = true) {
-  if (!tracks[id]) return;
-  selectedId = id;
-
-  // Fully reset metric coloring when switching tracks
-  currentMapColors = null;
-  MapView.clearMetricColor(id);
-  ChartView.toggleMapColor(null); // Ensure ChartView state also resets
-
-  UrlState.patch({ track: id, sel: null });
-
-  // Update UI immediately
-  renderTrackList();
-
-  // Render details
-  const activeTabBtn = document.querySelector('.tab-btn.active') as HTMLElement;
-  const activeTab = activeTabBtn ? activeTabBtn.dataset.tab : 'graphs';
-  if (activeTab === 'details') renderDetails(tracks[id], getGlobalTags());
-  if (activeTab === 'insights') renderInsights(tracks[id]);
-
-  // Tell sub-views
-  MapView.setSelectedTrack(id, fit);
-  if (fit) MapView.fitTrack(id);
-  ChartView.loadTrack(tracks[id]);
-}
-
-async function deleteTrack(id: string) {
-  await Storage.remove(id);
-  MapView.removeTrack(id);
-  delete tracks[id];
-
-  if (selectedId === id) {
-    selectedId = null;
-    UrlState.patch({ track: null, sel: null });
-    ChartView.clear();
-    const details = document.getElementById('details-view');
-    if (details)
-      details.innerHTML = `
-      <div id="details-empty" class="empty-state">
-        <span class="material-symbols-rounded empty-icon">no_sim</span>
-        <div class="empty-text">Select a track for details</div>
-      </div>
-    `;
-  }
-  applyFilters();
-}
-
-async function clearAll() {
-  if (!confirm('Remove all tracks?')) return;
-  await Storage.clear();
-  Object.keys(tracks).forEach((id) => MapView.removeTrack(id));
-  tracks = {};
-  selectedId = null;
-  colorIdx = 0;
-  UrlState.patch({ track: null, sel: null });
-  ChartView.clear();
-  applyFilters();
+function showToast(msg: string, type: 'info' | 'error' = 'info') {
+  const container = document.getElementById('toast-container');
+  if (!container) return;
+  const t = document.createElement('div');
+  t.className = `toast ${type}`;
+  t.textContent = msg;
+  container.appendChild(t);
+  setTimeout(() => {
+    t.classList.add('out');
+    setTimeout(() => t.remove(), 400);
+  }, 3000);
 }
 
 function initDropZone() {
-  const zone = document.getElementById('track-list');
+  const zone = document.getElementById('drop-zone');
   if (!zone) return;
 
   window.addEventListener('dragover', (e) => {
     e.preventDefault();
-    zone.classList.add('drag-over');
+    zone.classList.add('drop-active');
   });
 
   window.addEventListener('dragleave', (e) => {
     if (e.relatedTarget === null) {
-      zone.classList.remove('drag-over');
+      zone.classList.remove('drop-active');
     }
   });
 
   window.addEventListener('drop', async (e) => {
     e.preventDefault();
-    zone.classList.remove('drag-over');
+    zone.classList.remove('drop-active');
     
     const items = e.dataTransfer?.items;
     if (!items) return;
@@ -1004,16 +1276,27 @@ function initDropZone() {
       if (entry) queue.push(entry);
     }
 
-    while (queue.length > 0) {
-      const entry = queue.shift()!;
+    async function readAllEntries(entry: FileSystemEntry) {
       if (entry.isFile) {
         const file = await new Promise<File>((res) => (entry as FileSystemFileEntry).file(res));
         files.push(file);
       } else if (entry.isDirectory) {
         const reader = (entry as FileSystemDirectoryEntry).createReader();
-        const entries = await new Promise<FileSystemEntry[]>((res) => reader.readEntries(res));
-        queue.push(...entries);
+        let entries: FileSystemEntry[] = [];
+        let chunk: FileSystemEntry[];
+        do {
+          chunk = await new Promise<FileSystemEntry[]>((res) => reader.readEntries(res));
+          entries.push(...chunk);
+        } while (chunk.length > 0);
+        
+        for (const child of entries) {
+          await readAllEntries(child);
+        }
       }
+    }
+
+    for (const entry of queue) {
+      await readAllEntries(entry);
     }
 
     if (files.length) handleFiles(files);
@@ -1022,6 +1305,7 @@ function initDropZone() {
 
 async function handleFiles(files: File[]) {
   if (!files.length) return;
+  cancelProcessing = false;
   
   const loader = document.getElementById('global-loader');
   const loaderText = document.getElementById('loader-text');
@@ -1052,13 +1336,17 @@ async function handleFiles(files: File[]) {
     }
 
     for (let i = 0; i < validFiles.length; i++) {
+      if (cancelProcessing) break;
       const f = validFiles[i];
       if (loaderSubtext) loaderSubtext.textContent = f.name;
       if (progressBar) progressBar.style.width = `${(i / validFiles.length) * 100}%`;
 
       try {
         const data = await Parsers.parseFile(f);
-        const id = crypto.randomUUID();
+        let id = compactId(data.stats.startTime || Date.now());
+        if (tracks[id]) {
+          id += '-' + shortRandom();
+        }
 
         // Use filename as activity name if internal name is generic
         let trackName = data.name;
@@ -1070,147 +1358,37 @@ async function handleFiles(files: File[]) {
           ...data,
           id,
           name: trackName,
-          fileName: f.name,
-          color: TRACK_COLORS[colorIdx % TRACK_COLORS.length],
           addedAt: Date.now(),
           visible: true,
+          color: TRACK_COLORS[colorIdx % TRACK_COLORS.length],
         };
         colorIdx++;
-
-        if (!firstId) firstId = id;
 
         await Storage.save(track);
         tracks[id] = track;
         MapView.addTrack(track);
+        if (!firstId) firstId = id;
         count++;
         processedSinceLastUpdate++;
 
-        // Update UI incrementally for large batches
+        // Yield every 5 files to keep UI responsive
         if (processedSinceLastUpdate >= 5) {
-          applyFilters();
           processedSinceLastUpdate = 0;
+          await new Promise(r => setTimeout(r, 0));
         }
-      } catch (e) {
-        console.warn('Failed to parse file:', f.name, e);
-        showToast(`Error parsing ${f.name}`, 'error');
+      } catch (err) {
+        console.error(`Failed to parse file: ${f.name}`, err);
       }
     }
 
     if (count > 0) {
+      showToast(`Imported ${count} track${count > 1 ? 's' : ''}`);
       applyFilters();
-      
-      const visibleCount = Object.values(tracks).filter(t => !t._filtered && validFiles.some(f => f.name.includes(t.name) || t.name.includes(f.name))).length;
-      const hiddenByFilter = count - visibleCount;
-
-      let msg = `Added ${count} track${count > 1 ? 's' : ''}`;
-      if (hiddenByFilter > 0) {
-        msg += ` (${hiddenByFilter} hidden by active filters)`;
-      }
-      showToast(msg);
-
-      // Auto-select if only one added, or if nothing was selected
-      if (firstId && (count === 1 || !selectedId)) {
-        selectTrack(firstId);
-      }
+      if (firstId) selectTrack(firstId);
     }
   } finally {
     if (loader) loader.classList.add('hidden');
-    if (progressBar) progressBar.style.width = '0%';
   }
-}
-
-// ── Chart Callbacks ───────────────────────────────────────────────
-function onChartCursorMove(pt: TrackPoint) {
-  MapView.showCursorAt(pt.lat, pt.lon);
-  if (followDot) {
-    MapView.centerOn(pt.lat, pt.lon, null, true); // true = animate
-  }
-}
-
-function onChartRangeChange(minX: number | null, maxX: number | null, xAxis: string) {
-  const track = tracks[selectedId!];
-  if (!track || minX == null || maxX == null) {
-    UrlState.patch({ sel: null });
-    MapView.clearHighlight();
-    return;
-  }
-  const pts = track.points;
-  let iMin, iMax;
-  if (xAxis === 'distance') {
-    const dMin = minX * 1000,
-      dMax = maxX * 1000;
-    iMin = pts.findIndex((p) => (p.dist || 0) >= dMin);
-    iMax = pts.findLastIndex((p) => (p.dist || 0) <= dMax);
-  } else {
-    const t0 = pts[0].time || 0;
-    const tMin = t0 + minX * 1000,
-      tMax = t0 + maxX * 1000;
-    iMin = pts.findIndex((p) => (p.time || 0) >= tMin);
-    iMax = pts.findLastIndex((p) => (p.time || 0) <= tMax);
-  }
-
-  // Always save time-based selection to URL
-  if (iMin !== -1 && iMax !== -1) {
-    const t0 = pts[0].time || 0;
-    const tMin = ((pts[iMin].time || t0) - t0) / 1000;
-    const tMax = ((pts[iMax].time || t0) - t0) / 1000;
-    UrlState.patch({ sel: [tMin, tMax] });
-  }
-
-  if (iMin !== -1 && iMax !== -1 && iMin < iMax) {
-    MapView.highlightSegment(selectedId!, pts, iMin, iMax, true, currentMapColors);
-  } else {
-    MapView.clearHighlight();
-  }
-}
-
-function onChartClick(pt: TrackPoint) {
-  MapView.centerOn(pt.lat, pt.lon, POINT_ZOOM_LEVEL);
-}
-
-// ── Map Callbacks ─────────────────────────────────────────────────
-function onMapMove(lat: number, lng: number, zoom: number) {
-  UrlState.patch({ map_pos: [lat, lng, zoom] });
-}
-
-function onMapPointClick(trackId: string, ptIdx: number) {
-  if (trackId !== selectedId) selectTrack(trackId, false);
-  ChartView.setCursorAt(ptIdx);
-}
-
-function onMapDblClick() {
-  ChartView.clearPinnedDot();
-}
-
-function showToast(msg: string, type = 'info') {
-  const container = document.getElementById('toast-container');
-  if (!container) return;
-  const el = document.createElement('div');
-  el.className = `toast ${type}`;
-  el.textContent = msg;
-  container.appendChild(el);
-  setTimeout(() => {
-    el.classList.add('out');
-    setTimeout(() => el.remove(), 400);
-  }, 3000);
-}
-
-function updateToolbarLayout() {
-  const toolbar = document.getElementById('chart-toolbar');
-  const pills = document.getElementById('metric-pills');
-  if (!toolbar || !pills) return;
-
-  // We temporarily remove "collapsed" to measure the FULL width needed by pills
-  const wasCollapsed = toolbar.classList.contains('collapsed');
-  toolbar.classList.remove('collapsed');
-
-  // Comparison: scrollWidth (needed) vs clientWidth (available in toolbar)
-  const hasOverflow = pills.scrollWidth > pills.clientWidth;
-
-  if (hasOverflow) {
-    toolbar.classList.add('collapsed');
-  }
-  // Otherwise it stays uncollapsed
 }
 
 function initMetricPillDraggable() {
@@ -1253,6 +1431,45 @@ function initMetricPillDraggable() {
     ChartView.updateMetricOrder(keys);
     syncMetricsToUrl();
   });
+}
+
+function updateToolbarLayout() {
+  const toolbar = document.getElementById('chart-toolbar');
+  const pills = document.getElementById('metric-pills');
+  if (!toolbar || !pills) return;
+
+  toolbar.classList.remove('collapsed');
+  const availableW = pills.clientWidth;
+  let totalW = 0;
+  let hidden = false;
+
+  Array.from(pills.children).forEach((el) => {
+    const htmlEl = el as HTMLElement;
+    if (htmlEl.id === 'pill-overflow') return;
+    if (!htmlEl.classList.contains('active')) return;
+
+    const isOverflow = htmlEl.classList.contains('overflow-hidden');
+    if (isOverflow) {
+      htmlEl.classList.remove('overflow-hidden');
+    }
+
+    totalW += htmlEl.offsetWidth + 6;
+
+    if (totalW > availableW) {
+      hidden = true;
+      htmlEl.classList.add('overflow-hidden');
+    } else {
+      htmlEl.classList.remove('overflow-hidden');
+    }
+  });
+
+  const overflowEl = document.getElementById('pill-overflow');
+  if (overflowEl) {
+    overflowEl.classList.toggle('hidden', !hidden);
+  }
+  if (hidden) {
+    toolbar.classList.add('collapsed');
+  }
 }
 
 document.addEventListener('DOMContentLoaded', init);
