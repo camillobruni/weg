@@ -626,6 +626,55 @@ body.dragging-sidebar {
   border-radius: 8px;
   padding: 3px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  align-items: center;
+  gap: 0;
+}
+
+#extra-layers-menu {
+  position: absolute;
+  bottom: 45px;
+  right: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  max-height: 300px;
+  overflow-y: auto;
+  width: 200px;
+  z-index: 1000;
+  padding: 4px;
+}
+#extra-layers-menu.hidden {
+  display: none;
+}
+.extra-layers-header {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.extra-layer-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  padding: 6px 10px;
+  font-size: 11px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: all 0.1s;
+}
+.extra-layer-item:hover {
+  background: var(--surface2);
+  color: var(--text);
 }
 #map-loader {
   background: var(--surface);

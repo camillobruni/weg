@@ -26,6 +26,27 @@ export const MapView = (() => {
 
   const GAP_THRESHOLD: number = 60000; // 1 minute in ms
 
+  interface ImagerySource {
+    id: string;
+    name: string;
+    type: string;
+    url: string;
+    attribution?: { text?: string; url?: string };
+    max_zoom?: number;
+    extent?: {
+      min_lat?: number;
+      max_lat?: number;
+      min_lon?: number;
+      max_lon?: number;
+      polygon?: [number, number][][];
+    };
+    best?: boolean;
+    overlay?: boolean;
+  }
+
+  let imageryConfig: ImagerySource[] = [];
+  const extraLayers: Record<string, L.TileLayer> = {};
+
   // Tile layers
   const LAYERS: Record<string, L.TileLayer> = {
     swisstopo: L.tileLayer(
@@ -143,6 +164,7 @@ export const MapView = (() => {
   function switchBasemap(key: string) {
     if (!LAYERS[key]) return;
     Object.values(LAYERS).forEach((l) => map.removeLayer(l));
+    Object.values(extraLayers).forEach((l) => map.removeLayer(l));
     map.addLayer(LAYERS[key]);
   }
 
