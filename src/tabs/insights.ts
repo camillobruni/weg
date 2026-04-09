@@ -470,6 +470,7 @@ function renderCurveCard(opts: CurveCardOptions) {
         ],
         setCursor: [
           (u: uPlot) => {
+            u.redraw(false);
             const idx = u.cursor.idx;
             const ctx = u.ctx;
             const dpr = window.devicePixelRatio || 1;
