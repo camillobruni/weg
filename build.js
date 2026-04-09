@@ -29,16 +29,24 @@ const baseConfig = {
 };
 
 /**
- * Copies static assets that esbuild doesn't handle via imports
+ * Copies static assets that esbuild doesn't handle via imports.
+ * For index.html, it also removes the 'dist/' prefix from all paths.
  */
 async function copyStaticAssets() {
-  const assets = ['index.html', 'material_icons.woff2']; 
+  const assets = ['index.html', 'material_icons.woff2', 'material_symbols_rounded.woff2'];
   await mkdir('dist', { recursive: true });
-  
+
   for (const asset of assets) {
     try {
-      await copyFile(asset, path.join('dist', asset));
-      console.log(`Copied ${asset} to dist/`);
+      if (asset === 'index.html') {
+        let content = await readFile(asset, 'utf-8');
+        content = content.replace(/dist\//g, '');
+        await writeFile(path.join('dist', asset), content);
+        console.log(`Converted and copied ${asset} to dist/`);
+      } else {
+        await copyFile(asset, path.join('dist', asset));
+        console.log(`Copied ${asset} to dist/`);
+      }
     } catch (e) {
       console.warn(`Could not copy ${asset}: ${e.message}`);
     }
