@@ -87,6 +87,7 @@ export const ChartView = (() => {
   let activeMetrics: Set<string> = new Set(['elevation', 'speed']);
   let availableMetrics: Set<string> = new Set();
   let smoothedMetrics: Set<string> = new Set(['speed', 'gradient']);
+  let metricsIncludingZero: Set<string> = new Set(['power']);
   let xAxis: string = 'time';
   let currentTrack: TrackData | null = null;
   let allTracks: TrackData[] = [];
@@ -789,6 +790,22 @@ export const ChartView = (() => {
     mapColorBtn.innerHTML = '<span class="material-symbols-rounded">colorize</span>';
     mapColorBtn.addEventListener('click', () => toggleMapColor(metricKey));
 
+    // Zero-filter toggle (Cadence/Power/Speed)
+    let zeroBtn: HTMLButtonElement | null = null;
+    if (metricKey === 'cadence' || metricKey === 'power' || metricKey === 'speed') {
+      zeroBtn = document.createElement('button');
+      const incZero = metricsIncludingZero.has(metricKey);
+      zeroBtn.className = 'icon-btn mini' + (incZero ? ' active' : '');
+      zeroBtn.title = incZero ? 'Currently INCLUDING 0 values' : 'Currently EXCLUDING 0 values';
+      zeroBtn.innerHTML = `<span class="material-symbols-rounded">${incZero ? 'exposure_zero' : 'mobile_off'}</span>`;
+      zeroBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (metricsIncludingZero.has(metricKey)) metricsIncludingZero.delete(metricKey);
+        else metricsIncludingZero.add(metricKey);
+        render(true);
+      });
+    }
+
     const statsTotalEl = document.createElement('div');
     statsTotalEl.className = 'chart-stats-total';
 
@@ -799,7 +816,15 @@ export const ChartView = (() => {
     statsContainer.className = 'chart-row-stats-container';
     statsContainer.append(statsTotalEl, statsSelEl);
 
-    header.append(labelEl, smoothBtn, mapColorBtn, statsContainer);
+    const actionsEl = document.createElement('div');
+    actionsEl.className = 'chart-row-actions';
+    actionsEl.append(smoothBtn, mapColorBtn);
+
+    const rightActionsEl = document.createElement('div');
+    rightActionsEl.className = 'chart-row-right-actions';
+    if (zeroBtn) rightActionsEl.append(zeroBtn);
+
+    header.append(labelEl, actionsEl, statsContainer, rightActionsEl);
 
     const rowBody = document.createElement('div');
     rowBody.className = 'chart-row-body';
@@ -828,8 +853,10 @@ export const ChartView = (() => {
 
     // Per-range stats
     function updateHeaderStats(visibleMin: number, visibleMax: number) {
+      const incZero = metricsIncludingZero.has(metricKey) || (metricKey !== 'power' && metricKey !== 'cadence' && metricKey !== 'speed');
+
       const getHtml = (xMin: number, xMax: number, _isSel = false) => {
-        const s = rangeStats(xData, yData, xMin, xMax);
+        const s = rangeStats(xData, yData, xMin, xMax, incZero);
         if (!s) return '';
 
         let h = `
@@ -849,7 +876,7 @@ export const ChartView = (() => {
       };
 
       statsTotalEl.innerHTML =
-        `<span class="all-chip" title="Show full track and clear selection">ALL</span>` + getHtml(visibleMin, visibleMax);
+        `<span class="all-chip material-symbols-rounded" title="Show full track and clear selection">all_inclusive</span>` + getHtml(visibleMin, visibleMax);
       statsTotalEl.querySelector('.all-chip')?.addEventListener('click', (e) => {
         e.stopPropagation();
         cancelSelection();
@@ -857,7 +884,7 @@ export const ChartView = (() => {
 
       if (selAnchorVal !== null && selEndVal !== null) {
         statsSelEl.innerHTML =
-          `<span class="sel-tag" style="background:var(--chart-color); color:#000">SEL</span>` +
+          `<span class="sel-tag material-symbols-rounded" style="background:var(--chart-color); color:#000" title="Selected range">width_fixed</span>` +
           getHtml(selAnchorVal, selEndVal, true);
         statsSelEl.style.display = 'flex';
       } else {
@@ -1564,10 +1591,14 @@ export const ChartView = (() => {
     const binAccum = new Array(BINS).fill(0); // accumulated x-weight per bin (time in s or dist in km)
 
     const span = max - min || 1;
+    const metricKey = Object.keys(METRICS).find(k => METRICS[k] === histData.def);
+    const incZero = !metricKey || metricsIncludingZero.has(metricKey) || (metricKey !== 'power' && metricKey !== 'cadence' && metricKey !== 'speed');
 
     for (let i = 0; i < yData.length; i++) {
       const v = yData[i];
       if (v == null || !isFinite(v)) continue;
+      if (v === 0 && !incZero) continue;
+
       const bi = Math.min(BINS - 1, Math.floor(((v - min) / span) * BINS));
       bins[bi]++;
 
@@ -1606,9 +1637,14 @@ export const ChartView = (() => {
       const selBinAccum = new Array(BINS).fill(0);
       const { yData, xData } = histData;
       const span = max - min || 1;
+      const metricKey = Object.keys(METRICS).find(k => METRICS[k] === histData.def);
+      const incZero = !metricKey || metricsIncludingZero.has(metricKey) || (metricKey !== 'power' && metricKey !== 'cadence' && metricKey !== 'speed');
+
       for (let i = 0; i < yData.length; i++) {
         const v = yData[i];
         if (v == null || !isFinite(v)) continue;
+        if (v === 0 && !incZero) continue;
+
         const x = xData[i];
         if (x == null || x < selAnchorVal! || x > selEndVal!) continue;
         const bi = Math.min(BINS - 1, Math.floor(((v - min) / span) * BINS));
@@ -1859,87 +1895,136 @@ export const ChartView = (() => {
     });
   }
 
-      const count = bins[binI];
-      const total = bins.reduce((s, v) => s + v, 0);
-      const pct = (count / total) * 100;
+  function getBinAt(canvas: HTMLCanvasElement, histData: HistData, e: MouseEvent) {
+    const { bins, BINS } = histData;
+    if (!bins) return null;
+    const rect = canvas.getBoundingClientRect();
+    const relY = e.clientY - rect.top;
+    // Use exact padding from drawHistogram: t: 4, b: 30
+    const pad = { t: 4, b: 30 };
+    const plotH = rect.height - pad.t - pad.b;
+    const rawI = Math.floor(((relY - pad.t) / plotH) * BINS!);
+    const binI = BINS! - 1 - rawI;
+    if (rawI < 0 || rawI >= BINS!) return null;
+    return binI;
+  }
 
-      const span = max - min || 1;
-      const low = min + binI * (span / BINS!);
-      const high = min + (binI + 1) * (span / BINS!);
-      const label = `${def.fmt(low, true)} – ${def.fmt(high, true)} ${def.unit}`;
+  function updateHistTooltip(e: MouseEvent, canvas: HTMLCanvasElement, histData: HistData) {
+    if (!histTooltipEl) return;
+    const { bins, binAccum, min, max, BINS, def, plot } = histData;
+    if (!bins || !binAccum || min == null || max == null) return;
 
-      const totalAccum =
-        xAxis === 'distance' ? `${binAccum[binI].toFixed(2)} km` : fmtSecs(binAccum[binI]);
-      const totalPct = (binAccum[binI] / binAccum.reduce((s, v) => s + v, 0)) * 100;
-
-      let html = `
-        <div class="hist-tt-header" style="border-left-color:${def.color}">${label}</div>
-      `;
-
-      if (totalAccum) {
-        html += `<div class="hist-tt-grid">
-          <span class="hist-tt-label">${xAxis === 'distance' ? 'Dist' : 'Time'}</span>
-          <span class="hist-tt-value">${totalAccum}</span>
-          <span class="hist-tt-pct">${totalPct.toFixed(1)}%</span>
-        </div>`;
-      }
-
-      // Selection context
-      if (histData.selBins && histData.selBinAccum) {
-        const stotalAccum =
-          xAxis === 'distance'
-            ? `${histData.selBinAccum[binI].toFixed(2)} km`
-            : fmtSecs(histData.selBinAccum[binI]);
-        const stotalPct =
-          (histData.selBinAccum[binI] / histData.selBinAccum.reduce((s, v) => s + v, 0)) * 100;
-
-        html += `
-          <div class="hist-tt-grid sel-row">
-            <span class="hist-tt-label sel">Sel ${xAxis === 'distance' ? 'Dist' : 'Time'}</span>
-            <span class="hist-tt-value sel">${stotalAccum}</span>
-            <span class="hist-tt-pct sel">${stotalPct.toFixed(1)}%</span>
-          </div>
-        `;
-      }
-
-      histTooltipEl.innerHTML = html;
-
-      // Position tooltip: fixed X left of canvas, Y centered on bin
-      histTooltipEl.style.display = 'block';
-      const ttH = histTooltipEl.offsetHeight;
-      const ttW = histTooltipEl.offsetWidth;
-      // binY(i) = pad.t + (BINS-1-i) * (plotH/BINS), centre = + 0.5*(plotH/BINS)
-      const rect = canvas.getBoundingClientRect();
-      const pad = { t: 4, b: 30 };
-      const plotH = rect.height - pad.t - pad.b;
-      const binCY = rect.top + pad.t + (BINS! - 1 - binI + 0.5) * (plotH / BINS!);
-      const ttLeft = rect.left - ttW - 10;
-      const ttTop = Math.round(binCY - ttH / 2);
-      histTooltipEl.style.left = `${ttLeft}px`;
-      histTooltipEl.style.top = `${ttTop}px`;
-
-      // Dotted line: tooltip right edge → left edge of bars (through axes area)
-      if (lineEl) {
-        const lineY = Math.round(binCY);
-        const lineLeft = ttLeft + ttW;
-        const barLeft = rect.left + (histData.padL || 0);
-        const lineW = barLeft - lineLeft;
-        lineEl.style.display = 'block';
-        lineEl.style.left = `${lineLeft}px`;
-        lineEl.style.top = `${lineY}px`;
-        lineEl.style.width = `${Math.max(0, lineW)}px`;
-        lineEl.style.borderTopColor = hexToRgba(def.color, 0.5);
-      }
-    });
-
-    canvas.addEventListener('mouseleave', () => {
-      if (histTooltipEl) histTooltipEl.style.display = 'none';
+    const lineEl = document.getElementById('hist-line');
+    const binI = getBinAt(canvas, histData, e);
+    
+    if (binI == null || !bins[binI]) {
+      histTooltipEl.style.display = 'none';
       if (lineEl) lineEl.style.display = 'none';
       if (plot) {
         plot.hoveredHistY = null;
         drawHistogram(canvas, histData, canvas.height / (window.devicePixelRatio || 1));
       }
-    });
+      return;
+    }
+
+    if (plot) {
+      const span = max - min || 1;
+      plot.hoveredHistY = min + (binI + 0.5) * (span / BINS!);
+      drawHistogram(canvas, histData, canvas.height / (window.devicePixelRatio || 1), binI);
+    }
+
+    const count = bins[binI];
+    const total = bins.reduce((s, v) => s + v, 0);
+    const pct = (count / total) * 100;
+
+    const span = max - min || 1;
+    const low = min + binI * (span / BINS!);
+    const high = min + (binI + 1) * (span / BINS!);
+    const label = `${def.fmt(low, true)} – ${def.fmt(high, true)} ${def.unit}`;
+
+    // Zone info
+    let zoneHtml = '';
+    const mid = (low + high) / 2;
+    const metricKey = Object.keys(METRICS).find((k) => METRICS[k] === def);
+    let zones: any[] = [];
+    if (metricKey === 'power') zones = Zones.getPowerZones();
+    else if (metricKey === 'hr') zones = Zones.getHRZones();
+
+    if (zones.length > 0) {
+      const zIdx = zones.findIndex((z) => mid >= z.min && mid < z.max);
+      const z =
+        zIdx !== -1
+          ? zones[zIdx]
+          : mid >= zones[zones.length - 1].min
+            ? zones[zones.length - 1]
+            : null;
+      if (z) {
+        const finalZIdx = zIdx !== -1 ? zIdx : zones.length - 1;
+        zoneHtml = `
+          <div style="display:flex; align-items:center; gap:8px; margin-top:2px; margin-bottom:8px; padding-left:8px; border-left:3px solid ${z.color}; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px">
+            <span style="color:var(--text)">Z${finalZIdx + 1}</span>
+            <span style="color:var(--text-dim)">·</span>
+            <span style="color:var(--text-muted)">${z.name}</span>
+          </div>
+        `;
+      }
+    }
+
+    const totalAccum =
+      xAxis === 'distance' ? `${binAccum[binI].toFixed(2)} km` : fmtSecs(binAccum[binI]);
+    const totalPct = (binAccum[binI] / binAccum.reduce((s, v) => s + v, 0)) * 100;
+
+    let html = `
+      <div class="hist-tt-header" style="border-left-color:${def.color}">${label}</div>
+      ${zoneHtml}
+    `;
+
+    if (totalAccum) {
+      html += `<div class="hist-tt-grid">
+        <span class="hist-tt-label">${xAxis === 'distance' ? 'Dist' : 'Time'}</span>
+        <span class="hist-tt-value">${totalAccum}</span>
+        <span class="hist-tt-pct">${totalPct.toFixed(1)}%</span>
+      </div>`;
+    }
+
+    // Selection context
+    if (histData.selBins && histData.selBinAccum) {
+      const stotalAccum =
+        xAxis === 'distance'
+          ? `${histData.selBinAccum[binI].toFixed(2)} km`
+          : fmtSecs(histData.selBinAccum[binI]);
+      const stotalPct =
+        (histData.selBinAccum[binI] / histData.selBinAccum.reduce((s, v) => s + v, 0)) * 100;
+
+      html += `
+        <div class="hist-tt-grid sel-row">
+          <span class="hist-tt-label sel">Sel ${xAxis === 'distance' ? 'Dist' : 'Time'}</span>
+          <span class="hist-tt-value sel">${stotalAccum}</span>
+          <span class="hist-tt-pct sel">${stotalPct.toFixed(1)}%</span>
+        </div>
+      `;
+    }
+
+    histTooltipEl.innerHTML = html;
+
+    // Position tooltip: fixed X left of canvas, Y centered on bin
+    histTooltipEl.style.display = 'block';
+    const ttH = histTooltipEl.offsetHeight;
+    const ttW = histTooltipEl.offsetWidth;
+    const rect = canvas.getBoundingClientRect();
+    const plotH = rect.height - 4 - 30; // pad.t + pad.b
+    const binCenterY = rect.top + 4 + (BINS! - 1 - binI + 0.5) * (plotH / BINS!);
+
+    histTooltipEl.style.left = `${rect.left - ttW - 12}px`;
+    histTooltipEl.style.top = `${binCenterY - ttH / 2}px`;
+
+    // Horizontal line sync
+    if (lineEl) {
+      lineEl.style.display = 'block';
+      lineEl.style.top = `${binCenterY}px`;
+      lineEl.style.left = `0px`;
+      lineEl.style.width = `${rect.left}px`;
+    }
   }
 
   // ── Helpers ───────────────────────────────────────────────────
@@ -1963,6 +2048,7 @@ export const ChartView = (() => {
     yData: (number | null)[],
     xMin: number,
     xMax: number,
+    incZero = true,
   ) {
     let min = Infinity,
       max = -Infinity,
@@ -1972,6 +2058,8 @@ export const ChartView = (() => {
       if (xData[i] == null || xData[i]! < xMin || xData[i]! > xMax) continue;
       const v = yData[i];
       if (v == null || !isFinite(v)) continue;
+      if (v === 0 && !incZero) continue;
+      
       if (v < min) min = v;
       if (v > max) max = v;
       sum += v;
@@ -2528,8 +2616,26 @@ export const ChartView = (() => {
     fmt('stat-distance', s.totalDist != null ? `${(s.totalDist / 1000).toFixed(1)} km` : '—');
     fmt('stat-duration', s.duration != null ? fmtSecs(Math.floor(s.duration / 1000)) : '—');
     fmt('stat-elevation', s.elevGain != null ? `${Math.round(s.elevGain)} m` : '—');
-    fmt('stat-avg-speed', s.avgSpeed != null ? `${(s.avgSpeed * 3.6).toFixed(1)} km/h` : '—');
-    fmt('stat-avg-power', s.avgPower != null ? `${s.avgPower} W` : '—');
+
+    // Recalculate averages from visible plot data to respect zero filtering
+    const getAvg = (key: string) => {
+      const p = plots.find((p) => p.metricKey === key);
+      if (!p) return null;
+      const incZero = metricsIncludingZero.has(key) || (key !== 'power' && key !== 'cadence' && key !== 'speed');
+      const vals = p.yData.filter((v): v is number => v != null && (incZero || v !== 0));
+      if (!vals.length) return null;
+      return vals.reduce((a, b) => a + b, 0) / vals.length;
+    };
+
+    const avgSpeed = getAvg('speed');
+    fmt('stat-avg-speed', avgSpeed != null ? `${(avgSpeed * 3.6).toFixed(1)} km/h` : '—');
+
+    const avgPower = getAvg('power');
+    fmt('stat-avg-power', avgPower != null ? `${Math.round(avgPower)} W` : '—');
+
+    const avgCadence = getAvg('cadence');
+    fmt('stat-avg-cad', avgCadence != null ? `${Math.round(avgCadence)} rpm` : '—');
+
     fmt('stat-avg-hr', s.avgHR != null ? `${s.avgHR} bpm` : '—');
   }
 

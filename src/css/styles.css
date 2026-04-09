@@ -950,7 +950,17 @@ body.dragging-sidebar {
   justify-content: space-between;
 }
 .with-histogram .chart-row-stats-container {
-  margin-right: 150px; /* HIST_W (130) + HIST_GAP (20) */
+  margin-right: 20px; /* HIST_GAP only, HIST_W handled by right-actions */
+}
+.chart-row-right-actions {
+  width: 130px; /* HIST_W */
+  display: none;
+  align-items: center;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+.with-histogram .chart-row-right-actions {
+  display: flex;
 }
 .chart-stats-total, .chart-stats-selection {
   display: flex;
@@ -1236,6 +1246,12 @@ body.dragging-sidebar {
   gap: 8px;
   flex-shrink: 0;
   width: 140px; /* Fixed width for alignment */
+}
+
+.chart-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0;
 }
 
 .chart-row-icon {
