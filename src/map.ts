@@ -46,6 +46,7 @@ export const MapView = (() => {
 
   let imageryConfig: ImagerySource[] = [];
   const extraLayers: Record<string, L.TileLayer> = {};
+  let currentExtraSearch = '';
 
   // Tile layers
   const LAYERS: Record<string, L.TileLayer> = {
@@ -73,14 +74,12 @@ export const MapView = (() => {
 
   async function fetchImageryConfig() {
     try {
-      const resp = await fetch(
-        'https://raw.githubusercontent.com/osmlab/editor-layer-index/gh-pages/imagery.json',
-      );
+      const resp = await fetch('./imagery.json');
       if (!resp.ok) return;
       const data = await resp.json();
-      // Filter out non-tms/bing/wms for now, prefer tms
+      // Filter out non-tms/bing/wms for now
       imageryConfig = data.filter(
-        (s: ImagerySource) => s.type === 'tms' && s.url.includes('{z}') && !s.overlay,
+        (s: ImagerySource) => (s.type === 'tms' || s.type === 'wms' || s.type === 'wmts' || s.type === 'bing') && !s.overlay,
       );
       updateExtraLayersMenu();
     } catch (e) {
@@ -93,32 +92,89 @@ export const MapView = (() => {
     if (!menuEl) return;
 
     const bounds = map.getBounds();
-    const lat = bounds.getCenter().lat;
-    const lon = bounds.getCenter().lng;
+    const sw = bounds.getSouthWest();
+    const ne = bounds.getNorthEast();
 
-    // Filter by extent if present
+    // Filter by extent if present AND by search query
     const visible = imageryConfig
       .filter((s) => {
+        // Search filter
+        if (currentExtraSearch) {
+          const q = currentExtraSearch.toLowerCase();
+          if (!s.name.toLowerCase().includes(q) && !s.id.toLowerCase().includes(q)) return false;
+          return true; // If searching, show all matches regardless of viewport
+        }
+
         if (!s.extent) return true; // Global
         const e = s.extent;
-        if (e.min_lat != null && lat < e.min_lat) return false;
-        if (e.max_lat != null && lat > e.max_lat) return false;
-        if (e.min_lon != null && lon < e.min_lon) return false;
-        if (e.max_lon != null && lon > e.max_lon) return false;
+
+        // Extract effective bounds from polygon if lat/lon direct bounds are missing
+        let minLat = e.min_lat,
+          maxLat = e.max_lat,
+          minLon = e.min_lon,
+          maxLon = e.max_lon;
+
+        if (minLat == null && e.polygon && e.polygon[0]) {
+          minLat = Infinity;
+          maxLat = -Infinity;
+          minLon = Infinity;
+          maxLon = -Infinity;
+          for (const pt of e.polygon[0]) {
+            minLon = Math.min(minLon, pt[0]);
+            maxLon = Math.max(maxLon, pt[0]);
+            minLat = Math.min(minLat, pt[1]);
+            maxLat = Math.max(maxLat, pt[1]);
+          }
+        }
+
+        // Intersection check: viewport bounds vs layer extent
+        if (minLat != null && ne.lat < minLat) return false;
+        if (maxLat != null && sw.lat > maxLat) return false;
+        if (minLon != null && ne.lng < minLon) return false;
+        if (maxLon != null && sw.lng > maxLon) return false;
+
         return true;
       })
       .sort((a, b) => a.name.localeCompare(b.name));
 
     menuEl.innerHTML = `
       <div class="extra-layers-header">Additional Maps</div>
-      ${visible
-        .map(
-          (s) => `
-        <button class="extra-layer-item" data-id="${s.id}" title="${s.name}">${s.name}</button>
-      `,
-        )
-        .join('')}
+      <div class="extra-layers-search">
+        <input type="text" id="extra-layers-search-input" placeholder="Search maps..." value="${currentExtraSearch}">
+      </div>
+      <div class="extra-layers-license">
+        Definitions from <a href="https://github.com/osmlab/editor-layer-index" target="_blank">iD Editor Index</a> (CC0)
+      </div>
+      <div class="extra-layer-list">
+        ${visible
+          .map(
+            (s) => `
+          <div class="extra-layer-row">
+            <button class="extra-layer-item" data-id="${s.id}" title="${s.name}">${s.name}</button>
+            <div class="extra-layer-attribution" title="${s.attribution?.text || ''}">${s.attribution?.text || 'No attribution'}</div>
+          </div>
+        `,
+          )
+          .join('')}
+      </div>
     `;
+
+    const searchInput = menuEl.querySelector('#extra-layers-search-input') as HTMLInputElement;
+    // Don't focus automatically or it might be annoying on moveend
+    // But if we're clicking the menu button, we might want it.
+    
+    searchInput?.addEventListener('input', (e) => {
+      currentExtraSearch = (e.target as HTMLInputElement).value;
+      updateExtraLayersMenu();
+      // Re-focus after re-render
+      const newSearch = document.getElementById('extra-layers-search-input') as HTMLInputElement;
+      if (newSearch) {
+        newSearch.focus();
+        newSearch.setSelectionRange(newSearch.value.length, newSearch.value.length);
+      }
+    });
+    // Prevent menu close when clicking search
+    searchInput?.addEventListener('click', (e) => e.stopPropagation());
 
     menuEl.querySelectorAll('.extra-layer-item').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -131,22 +187,65 @@ export const MapView = (() => {
   }
 
   function switchExtraLayer(s: ImagerySource) {
+    // Handle Bing maps specially or skip if no key (Leaflet doesn't native Bing)
+    if (s.type === 'bing') {
+      console.warn('MapView: Bing maps require a plugin not currently loaded.');
+      return;
+    }
+
     // Convert iD-style URL to Leaflet-style if needed
     // iD uses {switch:a,b,c}, Leaflet uses {s}
-    const url = s.url.replace(/\{switch:([^}]+)\}/, '{s}');
+    let url = s.url.replace(/\{switch:([^}]+)\}/, '{s}');
     const subdomains = s.url.match(/\{switch:([^}]+)\}/)?.[1]?.split(',') || 'abc';
 
-    const layer = L.tileLayer(url, {
-      attribution: s.attribution?.text || '',
-      maxZoom: s.max_zoom || 20,
-      subdomains,
-    });
+    let layer: L.TileLayer;
+
+    // Handle WMS / WMTS or custom templates
+    if (s.type === 'wms' || url.includes('{bbox}') || url.includes('{width}') || url.includes('{proj}')) {
+      // Normalize iD placeholders to something we can handle or just use as is if it's a template
+      url = url.replace('{proj}', 'EPSG:3857')
+               .replace('{width}', '256')
+               .replace('{height}', '256')
+               .replace('{zoom}', '{z}')
+               .replace('{bbox}', '{bbox}');
+
+      // Basic heuristic: if it's WMS but doesn't have a full template, try L.tileLayer.wms
+      if (s.type === 'wms' && !url.includes('{bbox}')) {
+        layer = L.tileLayer.wms(url, {
+          attribution: s.attribution?.text || '',
+          maxZoom: s.max_zoom || 20,
+        });
+      } else {
+        // Many iD "wms" are actually tile templates with {bbox}
+        layer = L.tileLayer(url, {
+          attribution: s.attribution?.text || '',
+          maxZoom: s.max_zoom || 20,
+          subdomains,
+        });
+      }
+    } else {
+      // Standard TMS/XYZ
+      layer = L.tileLayer(url, {
+        attribution: s.attribution?.text || '',
+        maxZoom: s.max_zoom || 20,
+        subdomains,
+      });
+    }
 
     Object.values(LAYERS).forEach((l) => map.removeLayer(l));
     Object.values(extraLayers).forEach((l) => map.removeLayer(l));
 
     extraLayers[s.id] = layer;
+    layer.on('tileerror', (e) => {
+      console.error(`MapView: Tile error for layer ${s.id}`, e);
+    });
     map.addLayer(layer);
+
+    const activeLabel = document.getElementById('active-extra-map');
+    if (activeLabel) {
+      activeLabel.textContent = s.name;
+      activeLabel.classList.remove('hidden');
+    }
 
     // Unselect defaults
     document.querySelectorAll('.bm-btn').forEach((btn) => btn.classList.remove('active'));
@@ -180,10 +279,21 @@ export const MapView = (() => {
     burgerBtn?.addEventListener('click', (e) => {
       e.stopPropagation();
       menuEl?.classList.toggle('hidden');
-      if (!menuEl?.classList.contains('hidden')) updateExtraLayersMenu();
+      if (!menuEl?.classList.contains('hidden')) {
+        updateExtraLayersMenu();
+        const searchInput = document.getElementById('extra-layers-search-input') as HTMLInputElement;
+        searchInput?.focus();
+      }
     });
     document.addEventListener('click', () => menuEl?.classList.add('hidden'));
     menuEl?.addEventListener('click', (e) => e.stopPropagation());
+
+    // ESC key to close
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        menuEl?.classList.add('hidden');
+      }
+    });
 
     // Create custom panes for strict layering
     // order (lowest to highest): 
@@ -261,6 +371,12 @@ export const MapView = (() => {
     Object.values(LAYERS).forEach((l) => map.removeLayer(l));
     Object.values(extraLayers).forEach((l) => map.removeLayer(l));
     map.addLayer(LAYERS[key]);
+
+    const activeLabel = document.getElementById('active-extra-map');
+    if (activeLabel) {
+      activeLabel.classList.add('hidden');
+      activeLabel.textContent = '';
+    }
   }
 
   function addTrack(track: TrackData, pane: string = 'overlayPane') {

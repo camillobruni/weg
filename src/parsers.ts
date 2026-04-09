@@ -18,6 +18,8 @@ export interface TrackPoint {
   temp: number | null;
   gearFront: number | null;
   gearRear: number | null;
+  gearFrontTooth: number | null;
+  gearRearTooth: number | null;
   battery: number | null;
   dist?: number;
   gradient?: number | null;
@@ -667,8 +669,10 @@ export const Parsers = (() => {
               power: r.power ?? null,
               speed,
               temp: r.temperature ?? null,
-              gearFront: r.front_gear_num ?? null,
-              gearRear: r.rear_gear_num ?? null,
+              gearFront: r.front_gear_num ?? r.front_gear ?? null,
+              gearRear: r.rear_gear_num ?? r.rear_gear ?? null,
+              gearFrontTooth: r.front_gear_num_tooth ?? null,
+              gearRearTooth: r.rear_gear_num_tooth ?? null,
               battery,
             } as TrackPoint;
           });

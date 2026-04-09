@@ -630,9 +630,25 @@ body.dragging-sidebar {
   gap: 0;
 }
 
+#selected-extra-map {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  padding: 0 8px;
+  max-width: 120px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-left: 1px solid var(--border);
+  margin-left: 4px;
+}
+#selected-extra-map.hidden {
+  display: none;
+}
+
 #extra-layers-menu {
   position: absolute;
-  bottom: 45px;
+  top: 40px;
   right: 0;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -656,6 +672,41 @@ body.dragging-sidebar {
   border-bottom: 1px solid var(--border);
   margin-bottom: 4px;
 }
+.extra-layers-search {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+#extra-layers-search-input {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 11px;
+  padding: 4px 8px;
+  outline: none;
+}
+#extra-layers-search-input:focus {
+  border-color: var(--accent);
+}
+.extra-layers-license {
+  font-size: 9px;
+  color: var(--text-dim);
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.extra-layers-license a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.extra-layers-license a:hover {
+  text-decoration: underline;
+}
+.extra-layer-row {
+  margin-bottom: 2px;
+}
 .extra-layer-item {
   display: block;
   width: 100%;
@@ -663,8 +714,9 @@ body.dragging-sidebar {
   background: transparent;
   border: none;
   color: var(--text-muted);
-  padding: 6px 10px;
+  padding: 4px 10px 2px 10px;
   font-size: 11px;
+  font-weight: 600;
   border-radius: 4px;
   cursor: pointer;
   white-space: nowrap;
@@ -675,6 +727,14 @@ body.dragging-sidebar {
 .extra-layer-item:hover {
   background: var(--surface2);
   color: var(--text);
+}
+.extra-layer-attribution {
+  font-size: 8px;
+  color: var(--text-dim);
+  padding: 0 10px 4px 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 #map-loader {
   background: var(--surface);

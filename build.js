@@ -35,6 +35,7 @@ async function copyStaticAssets() {
   const assets = [
     { src: 'src/index.html', dest: 'index.html' },
     { src: 'src/imagery.json', dest: 'imagery.json' },
+    { src: 'src/imagery.LICENSE.txt', dest: 'imagery.LICENSE.txt' },
     { src: 'material_icons.woff2', dest: 'material_icons.woff2' },
     { src: 'material_symbols_rounded.woff2', dest: 'material_symbols_rounded.woff2' }
   ];
@@ -58,6 +59,13 @@ async function collectLicenses() {
     const rootLicense = await readFile('LICENSE', 'utf-8');
     output += 'WEG LICENSE\n===========\n\n' + rootLicense + '\n\n';
   } catch (e) {}
+
+  try {
+    const imgLicense = await readFile('src/imagery.LICENSE.txt', 'utf-8');
+    output += `\n\n------------------------------------------------------------------------------\nMAP DATA DEFINITIONS LICENSE (iD Editor Index)\n------------------------------------------------------------------------------\n\n${imgLicense}\n`;
+  } catch (e) {
+    console.warn('Could not find imagery license');
+  }
 
   for (const dep of deps) {
     try {

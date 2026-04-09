@@ -2124,10 +2124,17 @@ export const ChartView = (() => {
       }
     }
 
-    const content =
+    let content =
       metricKey !== 'elevation'
         ? `${def.fmt(yData[idx]!, false)}&nbsp;${def.unit}`
         : `${def.fmt(yData[idx]!, false)}&nbsp;${def.unit} <span style="color:${gColor};margin-left:6px;font-size:12px">∠</span> ${Math.abs(g).toFixed(1)}%`;
+
+    // Special handling for gears: show tooth count if available
+    if (metricKey === 'gearRear' && pts[idx].gearRearTooth != null) {
+      content = `${pts[idx].gearRearTooth}T <span style="font-size:10px; opacity:0.6; margin-left:4px">(pos ${yData[idx]})</span>`;
+    } else if (metricKey === 'gearFront' && pts[idx].gearFrontTooth != null) {
+      content = `${pts[idx].gearFrontTooth}T <span style="font-size:10px; opacity:0.6; margin-left:4px">(pos ${yData[idx]})</span>`;
+    }
 
     if (el.innerHTML !== content) el.innerHTML = content;
 
