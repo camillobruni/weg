@@ -34,6 +34,7 @@ const baseConfig = {
 async function copyStaticAssets() {
   const assets = [
     { src: 'src/index.html', dest: 'index.html' },
+    { src: 'src/imagery.json', dest: 'imagery.json' },
     { src: 'material_icons.woff2', dest: 'material_icons.woff2' },
     { src: 'material_symbols_rounded.woff2', dest: 'material_symbols_rounded.woff2' }
   ];

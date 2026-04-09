@@ -71,6 +71,87 @@ export const MapView = (() => {
     ),
   };
 
+  async function fetchImageryConfig() {
+    try {
+      const resp = await fetch(
+        'https://raw.githubusercontent.com/osmlab/editor-layer-index/gh-pages/imagery.json',
+      );
+      if (!resp.ok) return;
+      const data = await resp.json();
+      // Filter out non-tms/bing/wms for now, prefer tms
+      imageryConfig = data.filter(
+        (s: ImagerySource) => s.type === 'tms' && s.url.includes('{z}') && !s.overlay,
+      );
+      updateExtraLayersMenu();
+    } catch (e) {
+      console.error('MapView: Failed to fetch imagery config', e);
+    }
+  }
+
+  function updateExtraLayersMenu() {
+    const menuEl = document.getElementById('extra-layers-menu');
+    if (!menuEl) return;
+
+    const bounds = map.getBounds();
+    const lat = bounds.getCenter().lat;
+    const lon = bounds.getCenter().lng;
+
+    // Filter by extent if present
+    const visible = imageryConfig
+      .filter((s) => {
+        if (!s.extent) return true; // Global
+        const e = s.extent;
+        if (e.min_lat != null && lat < e.min_lat) return false;
+        if (e.max_lat != null && lat > e.max_lat) return false;
+        if (e.min_lon != null && lon < e.min_lon) return false;
+        if (e.max_lon != null && lon > e.max_lon) return false;
+        return true;
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    menuEl.innerHTML = `
+      <div class="extra-layers-header">Additional Maps</div>
+      ${visible
+        .map(
+          (s) => `
+        <button class="extra-layer-item" data-id="${s.id}" title="${s.name}">${s.name}</button>
+      `,
+        )
+        .join('')}
+    `;
+
+    menuEl.querySelectorAll('.extra-layer-item').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = (btn as HTMLElement).dataset.id!;
+        const source = imageryConfig.find((s) => s.id === id);
+        if (source) switchExtraLayer(source);
+        menuEl.classList.add('hidden');
+      });
+    });
+  }
+
+  function switchExtraLayer(s: ImagerySource) {
+    // Convert iD-style URL to Leaflet-style if needed
+    // iD uses {switch:a,b,c}, Leaflet uses {s}
+    const url = s.url.replace(/\{switch:([^}]+)\}/, '{s}');
+    const subdomains = s.url.match(/\{switch:([^}]+)\}/)?.[1]?.split(',') || 'abc';
+
+    const layer = L.tileLayer(url, {
+      attribution: s.attribution?.text || '',
+      maxZoom: s.max_zoom || 20,
+      subdomains,
+    });
+
+    Object.values(LAYERS).forEach((l) => map.removeLayer(l));
+    Object.values(extraLayers).forEach((l) => map.removeLayer(l));
+
+    extraLayers[s.id] = layer;
+    map.addLayer(layer);
+
+    // Unselect defaults
+    document.querySelectorAll('.bm-btn').forEach((btn) => btn.classList.remove('active'));
+  }
+
   function init(
     onSelect: (id: string) => void,
     onMove: (lat: number, lng: number, zoom: number) => void,
@@ -93,6 +174,17 @@ export const MapView = (() => {
 
     L.control.zoom({ position: 'bottomright' }).addTo(map);
 
+    // Burger menu toggle
+    const burgerBtn = document.getElementById('btn-extra-layers');
+    const menuEl = document.getElementById('extra-layers-menu');
+    burgerBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      menuEl?.classList.toggle('hidden');
+      if (!menuEl?.classList.contains('hidden')) updateExtraLayersMenu();
+    });
+    document.addEventListener('click', () => menuEl?.classList.add('hidden'));
+    menuEl?.addEventListener('click', (e) => e.stopPropagation());
+
     // Create custom panes for strict layering
     // order (lowest to highest): 
     // 1. All tracks (default overlayPane, z-index 400)
@@ -111,6 +203,7 @@ export const MapView = (() => {
     map.on('moveend', () => {
       const c = map.getCenter();
       onMoveCb(c.lat, c.lng, map.getZoom());
+      if (menuEl && !menuEl.classList.contains('hidden')) updateExtraLayersMenu();
     });
 
     map.on('dblclick', () => {
@@ -159,6 +252,8 @@ export const MapView = (() => {
       }),
       interactive: false,
     });
+
+    fetchImageryConfig();
   }
 
   function switchBasemap(key: string) {
