@@ -29,18 +29,22 @@ const baseConfig = {
 };
 
 /**
- * Copies static assets that esbuild doesn't handle via imports
+ * Copies static assets that esbuild doesn't handle via imports.
  */
 async function copyStaticAssets() {
-  const assets = ['index.html', 'material_icons.woff2']; 
+  const assets = [
+    { src: 'src/index.html', dest: 'index.html' },
+    { src: 'material_icons.woff2', dest: 'material_icons.woff2' },
+    { src: 'material_symbols_rounded.woff2', dest: 'material_symbols_rounded.woff2' }
+  ];
   await mkdir('dist', { recursive: true });
-  
+
   for (const asset of assets) {
     try {
-      await copyFile(asset, path.join('dist', asset));
-      console.log(`Copied ${asset} to dist/`);
+      await copyFile(asset.src, path.join('dist', asset.dest));
+      console.log(`Copied ${asset.src} to dist/${asset.dest}`);
     } catch (e) {
-      console.warn(`Could not copy ${asset}: ${e.message}`);
+      console.warn(`Could not copy ${asset.src}: ${e.message}`);
     }
   }
 }
@@ -105,15 +109,16 @@ async function build() {
   });
 
   if (watch) {
+    await copyStaticAssets();
     await Promise.all([
       ctxWeg.watch(),
       ctxCss.watch(),
       ...vendorCtxs.map(c => c.watch())
     ]);
     
-    // In watch mode, we serve from the project root so index.html works
+    // In watch mode, we serve from the dist directory
     const { host, port } = await ctxWeg.serve({
-      servedir: '.', 
+      servedir: 'dist', 
       fallback: 'index.html',
     });
     console.log(`Development server: http://${host}:${port}`);
