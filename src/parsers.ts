@@ -243,7 +243,9 @@ export const Parsers = (() => {
     return stats;
   }
 
-  const STANDARD_CURVE_DURATIONS = [1, 2, 5, 10, 20, 30, 60, 120, 300, 600, 1200, 1800, 3600, 7200, 10800];
+  const STANDARD_CURVE_DURATIONS = [
+    1, 2, 5, 10, 20, 30, 60, 120, 300, 600, 1200, 1800, 3600, 7200, 10800, 14400, 18000, 21600,
+  ];
 
   function calculateSlidingMax(data: number[], durations: number[]) {
     const curve: Record<number, { val: number; idx: number }> = {};

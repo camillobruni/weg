@@ -13,9 +13,14 @@ export function initDetails(onTagsChange: () => void) {
   onTagsChangeCb = onTagsChange;
 }
 
-export function renderDetails(track: TrackData, globalTags: string[] = []) {
+export function renderDetails(track: TrackData | null, globalTags: string[] = []) {
   const container = document.getElementById('details-view');
   if (!container) return;
+
+  if (!track) {
+    container.innerHTML = '';
+    return;
+  }
 
   const s = track.stats;
   const t0 = track.points[0].time;

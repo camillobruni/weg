@@ -21,6 +21,7 @@ export const MapView = (() => {
   let onSelectCb: (id: string) => void;
   let onMoveCb: (lat: number, lng: number, zoom: number) => void;
   let onPointClickCb: (id: string, idx: number) => void;
+  let onPointHoverCb: (id: string | null, idx: number | null) => void;
   let onDblClickCb: () => void;
 
   const GAP_THRESHOLD: number = 60000; // 1 minute in ms
@@ -53,11 +54,13 @@ export const MapView = (() => {
     onSelect: (id: string) => void,
     onMove: (lat: number, lng: number, zoom: number) => void,
     onPointClick: (id: string, idx: number) => void,
+    onPointHover: (id: string | null, idx: number | null) => void,
     onDblClick: () => void,
   ) {
     onSelectCb = onSelect;
     onMoveCb = onMove;
     onPointClickCb = onPointClick;
+    onPointHoverCb = onPointHover;
     onDblClickCb = onDblClick;
 
     map = L.map('map', {
@@ -72,14 +75,14 @@ export const MapView = (() => {
     // Create custom panes for strict layering
     // order (lowest to highest): 
     // 1. All tracks (default overlayPane, z-index 400)
-    // 2. Black outline for current track
-    // 3. White thick outline for selected interval
-    // 4. Color for current track
-    map.createPane('selectedOutlinePane');
-    map.getPane('selectedOutlinePane')!.style.zIndex = '410';
-    
+    // 2. White selection range outline (highlightPane)
+    // 3. Black outline for current track (selectedOutlinePane)
+    // 4. Color for current track (foregroundPane)
     map.createPane('highlightPane');
-    map.getPane('highlightPane')!.style.zIndex = '420';
+    map.getPane('highlightPane')!.style.zIndex = '410';
+
+    map.createPane('selectedOutlinePane');
+    map.getPane('selectedOutlinePane')!.style.zIndex = '420';
     
     map.createPane('foregroundPane');
     map.getPane('foregroundPane')!.style.zIndex = '430';
@@ -91,6 +94,39 @@ export const MapView = (() => {
 
     map.on('dblclick', () => {
       onDblClickCb();
+    });
+
+    map.on('mousemove', (e: L.LeafletMouseEvent) => {
+      const tracksFound = findNearestTracks(e.latlng, 24);
+      if (tracksFound.length > 0) {
+        const nearest = tracksFound[0];
+        if (nearest.id === selectedId) {
+          onPointHoverCb(nearest.id, nearest.pointIdx);
+          return;
+        }
+      }
+      onPointHoverCb(null, null);
+    });
+
+    map.on('click', (e: L.LeafletMouseEvent) => {
+      const tracksFound = findNearestTracks(e.latlng);
+      if (tracksFound.length === 0) return;
+      
+      const nearest = tracksFound[0];
+
+      // If clicking on/near the ALREADY selected track, move the pinned point
+      if (nearest.id === selectedId && nearest.dist < 32) {
+        onPointClickCb(nearest.id, nearest.pointIdx);
+        return;
+      }
+
+      if (tracksFound.length === 1 && nearest.dist < 32) {
+        // If very close to exactly one track, just select it
+        onSelectCb(nearest.id);
+        return;
+      }
+
+      showTrackPickerPopup(e.latlng, tracksFound);
     });
 
     cursorMarker = L.marker([0, 0], {
@@ -129,7 +165,7 @@ export const MapView = (() => {
               L.polyline(currentSegment, { color: track.color, weight: 3, opacity: 0.2, pane }),
             );
           }
-          // Draw dotted line for gap
+          // Draw solid line for gap
           layers.push(
             L.polyline(
               [
@@ -137,10 +173,9 @@ export const MapView = (() => {
                 [p.lat, p.lon],
               ],
               {
-                color: track.color,
-                weight: 2,
-                opacity: 0.15,
-                dashArray: '5, 8',
+                color: '#888896',
+                weight: 3,
+                opacity: 1,
                 pane
               },
             ),
@@ -156,10 +191,93 @@ export const MapView = (() => {
 
     const group = L.featureGroup(layers).addTo(map);
     group.on('click', (e: L.LeafletMouseEvent) => {
-      L.DomEvent.stopPropagation(e);
-      if (onSelectCb) onSelectCb(track.id);
+      // Don't stopPropagation so map click listener also fires
     });
     polylines[track.id] = group;
+  }
+
+  function findNearestTracks(latlng: L.LatLng, maxPixelDist = 32): { id: string, name: string, color: string, dist: number, geoDist: number, pointIdx: number }[] {
+    const results: { id: string, name: string, color: string, dist: number, geoDist: number, pointIdx: number }[] = [];
+    const clickPoint = map.latLngToContainerPoint(latlng);
+
+    for (const id in trackData) {
+      if (!map.hasLayer(polylines[id])) continue;
+      const t = trackData[id];
+      let minDistPx = Infinity;
+      let minGeoDist = Infinity;
+      let pointIdx = -1;
+
+      // Quick bounds check with a pixel-based buffer
+      const bounds = polylines[id].getBounds();
+      const sw = map.latLngToContainerPoint(bounds.getSouthWest());
+      const ne = map.latLngToContainerPoint(bounds.getNorthEast());
+      
+      // Expand pixel bounds by maxPixelDist
+      if (clickPoint.x < sw.x - maxPixelDist || clickPoint.x > ne.x + maxPixelDist ||
+          clickPoint.y > sw.y + maxPixelDist || clickPoint.y < ne.y - maxPixelDist) {
+        continue;
+      }
+
+      // Find nearest point in track
+      for (let i = 0; i < t.points.length; i++) {
+        const p = t.points[i];
+        const pt = map.latLngToContainerPoint([p.lat, p.lon]);
+        const dpx = clickPoint.distanceTo(pt);
+        if (dpx < minDistPx) {
+          minDistPx = dpx;
+          minGeoDist = haversine(latlng.lat, latlng.lng, p.lat, p.lon);
+          pointIdx = i;
+        }
+        if (minDistPx < 5) break; // Optimization: close enough
+      }
+
+      if (minDistPx <= maxPixelDist) {
+        results.push({ id, name: t.name, color: t.color, dist: minDistPx, geoDist: minGeoDist, pointIdx });
+      }
+    }
+
+    return results.sort((a, b) => a.dist - b.dist);
+  }
+
+  function showTrackPickerPopup(latlng: L.LatLng, tracks: { id: string, name: string, color: string, geoDist: number }[]) {
+    const content = document.createElement('div');
+    content.className = 'track-picker-popup';
+    
+    const fmtGeoDist = (m: number) => {
+      if (m < 1000) return `${Math.round(m)}m away`;
+      return `${(m / 1000).toFixed(1)}km away`;
+    };
+
+    content.innerHTML = `
+      <div class="picker-header">Select track</div>
+      <div class="picker-list">
+        ${tracks.map(t => `
+          <div class="picker-item" data-id="${t.id}">
+            <div class="picker-color" style="background:${t.color}"></div>
+            <div class="picker-info">
+              <div class="picker-name">${t.name}</div>
+              <div class="picker-meta">${fmtGeoDist(t.geoDist)}</div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+
+    content.querySelectorAll('.picker-item').forEach(el => {
+      el.addEventListener('click', () => {
+        onSelectCb((el as HTMLElement).dataset.id!);
+        map.closePopup();
+      });
+    });
+
+    L.popup({
+      closeButton: false,
+      className: 'weg-popup',
+      maxWidth: 240,
+    })
+      .setLatLng(latlng)
+      .setContent(content)
+      .openOn(map);
   }
 
   function removeTrack(id: string) {
@@ -233,7 +351,16 @@ export const MapView = (() => {
     map.fitBounds(bounds.pad(0.15), { animate: true });
   }
 
+  function ensureVisible(latlngs: [number, number][]) {
+    if (!latlngs || latlngs.length < 2) return;
+    const bounds = L.latLngBounds(latlngs);
+    if (!map.getBounds().contains(bounds)) {
+      map.fitBounds(bounds.pad(0.2), { animate: true });
+    }
+  }
+
   // ── Chart-selection highlight segment ────────────────────────
+
   // pts: full points array, iMin/iMax: indices of visible range
   function highlightSegment(
     id: string,
@@ -245,6 +372,10 @@ export const MapView = (() => {
   ) {
     clearHighlight();
     if (!pts || iMin >= iMax) return;
+    
+    // If selecting full track, don't show the highlight
+    if (iMin === 0 && iMax >= pts.length - 1) return;
+
     const latlngs = pts.slice(iMin, iMax + 1).map((p) => [p.lat, p.lon] as [number, number]);
     if (latlngs.length < 2) return;
 
@@ -255,16 +386,18 @@ export const MapView = (() => {
     // Triple layer for maximum pronunciation: Black -> White -> Color
     const bgBlack = L.polyline(latlngs, {
       color: '#000000',
-      weight: 14,
+      weight: 13,
       opacity: 0.5,
       interactive: false,
+      pane: 'highlightPane',
     });
 
     const bgWhite = L.polyline(latlngs, {
       color: '#ffffff',
-      weight: 9,
+      weight: 11,
       opacity: 0.9,
       interactive: false,
+      pane: 'highlightPane',
     });
 
     // Inner segments: handle both metric coloring and gaps
@@ -285,10 +418,11 @@ export const MapView = (() => {
           ],
           {
             color: isGap ? '#888896' : c,
-            weight: 6,
+            weight: 4,
             opacity: 1,
             dashArray: isGap ? '4, 6' : undefined,
             interactive: false,
+            pane: 'foregroundPane',
           },
         ),
       );
@@ -312,8 +446,13 @@ export const MapView = (() => {
     const mStart = L.marker([pts[iMin].lat, pts[iMin].lon], {
       icon: startIcon,
       interactive: false,
+      pane: 'foregroundPane',
     });
-    const mEnd = L.marker([pts[iMax].lat, pts[iMax].lon], { icon: endIcon, interactive: false });
+    const mEnd = L.marker([pts[iMax].lat, pts[iMax].lon], {
+      icon: endIcon,
+      interactive: false,
+      pane: 'foregroundPane',
+    });
 
     // Group them on the highlightLine variable for easy removal
     highlightLine = L.featureGroup([bgBlack, bgWhite, inner, mStart, mEnd]).addTo(map);
@@ -377,17 +516,18 @@ export const MapView = (() => {
               [pts[i - 1].lat, pts[i - 1].lon],
               [pts[i].lat, pts[i].lon],
             ],
-            { color: '#888896', weight: 2, opacity: 0.5, dashArray: '4, 6', interactive: false },
+            { color: '#888896', weight: 4, opacity: 1, interactive: false, pane: 'foregroundPane' },
           ),
         );
       } else {
+
         segs.push(
           L.polyline(
             [
               [pts[i - 1].lat, pts[i - 1].lon],
               [pts[i].lat, pts[i].lon],
             ],
-            { color: c, weight: 4, opacity: 0.9, interactive: false },
+            { color: c, weight: 4, opacity: 0.9, interactive: false, pane: 'foregroundPane' },
           ),
         );
       }
@@ -437,6 +577,7 @@ export const MapView = (() => {
     hideCursor,
     highlightSegment,
     clearHighlight,
+    ensureVisible,
     centerOn,
     closePopup,
     invalidateSize,

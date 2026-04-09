@@ -17,9 +17,14 @@ export function initInsights(showToast: (msg: string, type?: string) => void) {
   toastFn = showToast;
 }
 
-export function renderInsights(track: TrackData) {
+export function renderInsights(track: TrackData | null) {
   const container = document.getElementById('insights-view');
   if (!container) return;
+
+  if (!track) {
+    container.innerHTML = '';
+    return;
+  }
 
   const s = track.stats;
   if (!s.powerCurve && !s.hrZones && !s.hrCurve) {
