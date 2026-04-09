@@ -868,6 +868,9 @@ body.dragging-sidebar {
   font-size: var(--fs-m);
   font-weight: 700;
   transition: all 0.1s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 .tab-btn:hover {
   color: var(--text-muted);
@@ -875,6 +878,9 @@ body.dragging-sidebar {
 .tab-btn.active {
   color: var(--accent);
   border-bottom-color: var(--accent);
+}
+.tab-btn .material-symbols-rounded {
+  font-size: var(--is-s);
 }
 
 .tab-content {

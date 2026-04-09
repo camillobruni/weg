@@ -8,6 +8,7 @@ import uPlot from 'uplot';
 import { TrackPoint, TrackStats, TrackData } from './parsers';
 import { gaussianSmooth, fmtSecs, hexToRgba } from './utils';
 import { Zones } from './zones.ts';
+import { Colors } from './colors';
 
 // Augment uPlot to include our custom property
 interface WegPlot extends uPlot {
@@ -142,7 +143,7 @@ export const ChartView = (() => {
       label: 'Speed',
       field: 'speed',
       unit: 'km/h',
-      color: '#45B7D1',
+      color: Colors.speed,
       abbr: 'spd',
       icon: 'speed',
       fmt: (v) => (v * 3.6).toFixed(1),
@@ -153,7 +154,7 @@ export const ChartView = (() => {
       label: 'Gradient',
       field: 'gradient',
       unit: '%',
-      color: '#A8C8A0',
+      color: Colors.gradient,
       abbr: 'grad',
       icon: 'trending_up',
       fmt: (v) => v.toFixed(1),
@@ -163,7 +164,7 @@ export const ChartView = (() => {
       label: 'Power',
       field: 'power',
       unit: 'W',
-      color: '#F7DC6F',
+      color: Colors.power,
       abbr: 'pwr',
       icon: 'bolt',
       fmt: (v) => Math.round(v).toString(),
@@ -173,7 +174,7 @@ export const ChartView = (() => {
       label: 'Heart Rate',
       field: 'hr',
       unit: 'bpm',
-      color: '#FF6B6B',
+      color: Colors.hr,
       abbr: 'hr',
       icon: 'favorite',
       fmt: (v) => Math.round(v).toString(),
@@ -183,7 +184,7 @@ export const ChartView = (() => {
       label: 'Cadence',
       field: 'cad',
       unit: 'rpm',
-      color: '#BB8FCE',
+      color: Colors.cadence,
       abbr: 'cad',
       icon: 'directions_run',
       fmt: (v) => Math.round(v).toString(),
@@ -193,7 +194,7 @@ export const ChartView = (() => {
       label: 'Temp',
       field: 'temp',
       unit: '°C',
-      color: '#F8C471',
+      color: Colors.temperature,
       abbr: 'temp',
       icon: 'thermostat',
       fmt: (v) => v.toFixed(1),
@@ -710,7 +711,6 @@ export const ChartView = (() => {
         100,
         containerW - ROW_BODY_PADDING - (statsVisible ? HIST_W + HIST_GAP : 0),
       );
-      console.log(`ChartView: Rendering charts with width=${w} (container=${containerW})`);
       available.forEach((key) => {
         const def = METRICS[key];
         let yData = def.compute

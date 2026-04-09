@@ -199,10 +199,11 @@
       <!-- Chart panel -->
       <div id="chart-panel">
         <div id="tab-nav">
-          <button class="tab-btn active" data-tab="graphs">Analysis</button>
-          <button class="tab-btn" data-tab="insights">Insights</button>
-          <button class="tab-btn" data-tab="details">Details</button>
-          <button class="tab-btn" data-tab="combined">Combined</button>
+          <button class="tab-btn active" data-tab="graphs"><span class="material-symbols-rounded">monitoring</span>Analysis</button>
+          <button class="tab-btn" data-tab="insights"><span class="material-symbols-rounded">analytics</span>Insights</button>
+          <button class="tab-btn" data-tab="details"><span class="material-symbols-rounded">list_alt</span>Details</button>
+          <button class="tab-btn" data-tab="combined"><span class="material-symbols-rounded">layers</span>Combined</button>
+          <button class="tab-btn" data-tab="evolution"><span class="material-symbols-rounded">timeline</span>Evolution</button>
         </div>
 
         <div id="tab-graphs" class="tab-content active">
@@ -316,6 +317,15 @@
             <div id="combined-empty" class="empty-state">
               <span class="material-symbols-rounded empty-icon">no_sim</span>
               <div class="empty-text">Select a track for combined analysis</div>
+            </div>
+          </div>
+        </div>
+
+        <div id="tab-evolution" class="tab-content">
+          <div id="evolution-view">
+            <div id="evolution-empty" class="empty-state">
+              <span class="material-symbols-rounded empty-icon">no_sim</span>
+              <div class="empty-text">Select a track for evolution analysis</div>
             </div>
           </div>
         </div>

@@ -14,6 +14,7 @@ import { ChartView } from './charts';
 import { renderDetails, initDetails } from './tabs/details';
 import { renderInsights, initInsights } from './tabs/insights';
 import { renderCombined, initCombined, resizeCombined } from './tabs/combined';
+import { renderEvolution } from './tabs/evolution';
 import { fmtSecs, escHtml, fmtDate, getTagColor, compactId, shortRandom } from './utils';
 
 const TRACK_COLORS: string[] = [
@@ -176,6 +177,46 @@ function showMetricMenu(anchorEl: HTMLElement) {
 }
 
 // ── Tab Management ────────────────────────────────────────────────
+document.addEventListener('select-track', (e: any) => {
+  const id = e.detail.id;
+  const idx = e.detail.idx;
+  const dur = e.detail.dur;
+  if (id && tracks[id]) {
+    selectTrack(id);
+    if (idx != null && dur != null) {
+      const t = tracks[id];
+      const pts = t.points;
+      if (idx >= 0 && idx < pts.length) {
+        const pIdx = pts[idx];
+        if (pIdx && pIdx.time != null) {
+          const t0 = pts.find(p => p.time != null)?.time || 0;
+          const tMin = (pIdx.time - t0) / 1000;
+          const tMax = tMin + dur;
+          
+          // ChartView selection
+          ChartView.restoreSelection(tMin, tMax);
+          
+          // Find iMax based on duration
+          let iMax = pts.findIndex(p => (p.time || 0) >= pIdx.time! + dur * 1000);
+          if (iMax === -1) iMax = pts.length - 1;
+          
+          const selPts = pts.slice(idx, iMax + 1);
+          const stats = Parsers.computeStats(selPts);
+          ChartView.setSelectionStats(stats);
+          
+          renderInsights(t);
+          
+          MapView.highlightSegment(id, pts, idx, iMax, false, currentMapColors);
+          MapView.ensureVisible(selPts.map(p => [p.lat, p.lon] as [number, number]));
+          
+          // Update URL state
+          UrlState.patch({ sel: [tMin, tMax] });
+        }
+      }
+    }
+  }
+});
+
 document.addEventListener('click', (e) => {
   const btn = (e.target as HTMLElement).closest('.tab-btn') as HTMLElement;
   if (!btn) return;
@@ -202,6 +243,10 @@ document.addEventListener('click', (e) => {
 
   if (btn.dataset.tab === 'insights' && selectedId && tracks[selectedId]) {
     renderInsights(tracks[selectedId]);
+  }
+
+  if (btn.dataset.tab === 'evolution' && selectedId && tracks[selectedId]) {
+    renderEvolution(tracks[selectedId], Object.values(tracks));
   }
 
   if (btn.dataset.tab === 'combined' && selectedId && tracks[selectedId]) {
@@ -829,6 +874,7 @@ function selectTrack(id: string, fit = true) {
   if (activeTab === 'details') renderDetails(tracks[id], getGlobalTags());
   if (activeTab === 'insights') renderInsights(tracks[id]);
   if (activeTab === 'combined') renderCombined(tracks[id]);
+  if (activeTab === 'evolution') renderEvolution(tracks[id], Object.values(tracks));
 
   // Tell sub-views
   MapView.setSelectedTrack(id, fit);

@@ -12,6 +12,7 @@ import { Zones } from '../zones.ts';
 import { ChartView } from '../charts';
 import { UrlState } from '../url-state';
 import { fmtSecs, escHtml, fmtDuration } from '../utils';
+import { Colors } from '../colors';
 
 let toastFn: (msg: string, type?: string) => void = () => {};
 export function initInsights(showToast: (msg: string, type?: string) => void) {
@@ -53,7 +54,7 @@ export function renderInsights(track: TrackData | null) {
       metricKey: 'power',
       label: 'Power Curve',
       unit: 'W',
-      color: '#F7DC6F',
+      color: Colors.power,
       icon: 'bolt',
     });
   }
@@ -66,7 +67,7 @@ export function renderInsights(track: TrackData | null) {
       metricKey: 'hr',
       label: 'Heart Rate Curve',
       unit: 'bpm',
-      color: '#FF6B6B',
+      color: Colors.hr,
       icon: 'favorite',
     });
   }
@@ -75,7 +76,7 @@ export function renderInsights(track: TrackData | null) {
     const card = document.createElement('div');
     card.className = 'insight-card';
     const metricKey = 'power';
-    const color = '#F7DC6F';
+    const color = Colors.power;
     card.style.setProperty('--chart-color', color);
     const isMapColored = ChartView.getMapColorMetric() === metricKey;
 
@@ -145,7 +146,7 @@ export function renderInsights(track: TrackData | null) {
     const card = document.createElement('div');
     card.className = 'insight-card';
     const metricKey = 'hr';
-    const color = '#FF6B6B';
+    const color = Colors.hr;
     card.style.setProperty('--chart-color', color);
     const isMapColored = ChartView.getMapColorMetric() === metricKey;
 
@@ -218,7 +219,7 @@ export function renderInsights(track: TrackData | null) {
 
   climbingCard.innerHTML = `
     <div class="insight-title">
-      <span class="material-symbols-rounded" style="color:#4ECDC4">terrain</span>Climbing Analysis
+      <span class="material-symbols-rounded" style="color:${Colors.climbing}">terrain</span>Climbing Analysis
     </div>
     <div class="details-grid" style="grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 10px">
       <div class="details-card" style="padding: 12px">
