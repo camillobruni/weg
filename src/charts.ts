@@ -954,7 +954,7 @@ export const ChartView = (() => {
             const maxLabels = Math.floor(plotDim / minSpace);
             return maxLabels > 0 ? plotDim / maxLabels : minSpace;
           },
-          font: '10px system-ui',
+          font: '10px system-ui, sans-serif',
           values: (isDistAxis
             ? (_u: uPlot, vals: number[]) => {
                 const range = (_u.scales.x?.max ?? 1) - (_u.scales.x?.min ?? 0);
@@ -980,7 +980,7 @@ export const ChartView = (() => {
           grid: { stroke: '#2e2e34', width: 1 },
           ticks: { stroke: '#2e2e34' },
           size: 55,
-          font: '10px system-ui',
+          font: '10px system-ui, sans-serif',
           values: ((_u: uPlot, vals: number[]) =>
             vals.map((v) => (v != null ? def.fmtAxis(v) : ''))) as any,
         },
