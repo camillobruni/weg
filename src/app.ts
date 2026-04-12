@@ -7,7 +7,7 @@
 // ── Main Application ──────────────────────────────────────────────
 
 import { Storage } from './storage';
-import { UrlState } from './url-state';
+import { UrlState, AppState } from './url-state';
 import { Parsers, TrackData, TrackPoint, calculateBounds, simplifyTrack } from './parsers';
 import { MapView } from './map';
 import { ChartView } from './charts';
@@ -71,14 +71,14 @@ let filters: Filters = {
   sport: null,
 };
 
-function syncFiltersToUrl() {
+function syncFiltersToUrl(push: boolean = false) {
   UrlState.patch({
     f_date: filters.date.every((v) => v === null) ? null : filters.date,
     f_dist: filters.dist.every((v) => v === null) ? null : filters.dist,
     f_dur: filters.dur.every((v) => v === null) ? null : filters.dur,
     f_mets: filters.metrics.size === 0 ? null : Array.from(filters.metrics),
     f_tags: filters.tags.length === 0 ? null : filters.tags,
-  });
+  }, push);
 }
 
 function syncMetricsToUrl() {
@@ -237,7 +237,7 @@ document.addEventListener('click', (e) => {
   nav.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b === btn));
 
   const tab = btn.dataset.tab!;
-  UrlState.patch({ tab });
+  UrlState.patch({ tab }, true);
 
   // Toggle contents
   const panel = nav.closest('#chart-panel');
@@ -262,6 +262,11 @@ document.addEventListener('click', (e) => {
         ChartView.restoreSelection(range[0], range[1]);
         onChartRangeChange(range[0], range[1], 'time', true);
       }
+    }, (start, end) => {
+      filters.date = [start, end];
+      applyFilters();
+      syncFiltersToUrl(true);
+      updateFilterUI();
     });
   }
 
@@ -348,63 +353,7 @@ async function init() {
     }
   });
 
-  // Restore basemap
-  if (urlState.map && typeof urlState.map === 'string') {
-    MapView.switchBasemap(urlState.map);
-    document
-      .querySelectorAll('.bm-btn')
-      .forEach((b) =>
-        b.classList.toggle('active', (b as HTMLElement).dataset.layer === urlState.map),
-      );
-  }
-
-  // Restore map position (before fitAll so it doesn't get overridden)
-  if (urlState.map_pos) {
-    const [lat, lng, zoom] = urlState.map_pos;
-    MapView.setPosition(lat, lng, zoom);
-  }
-
-  // Restore tab
-  if (urlState.tab) {
-    document.querySelectorAll('.tab-btn').forEach((btn) => {
-      const b = btn as HTMLElement;
-      if (b.dataset.tab === urlState.tab) {
-        b.click();
-      }
-    });
-  }
-
-  // Restore x-axis mode
-  if (urlState.xaxis) {
-    ChartView.setXAxis(urlState.xaxis);
-  }
-  const currentXAxis = urlState.xaxis || 'time';
-  document
-    .querySelectorAll('#x-axis-ctrl .seg-btn')
-    .forEach((b) => b.classList.toggle('active', (b as HTMLElement).dataset.axis === currentXAxis));
-
-  // Restore active metrics
-  if (urlState.metrics) {
-    const metrics = ChartView.METRICS;
-    const keys = urlState.metrics
-      .map((abbr) => Object.keys(metrics).find((k) => metrics[k].abbr === abbr))
-      .filter((k): k is string => k !== undefined);
-    if (keys.length) ChartView.setActiveMetrics(keys);
-  }
-
-  // Restore filters
-  if (urlState.f_date) filters.date = urlState.f_date.map((v) => v || null) as [string | null, string | null];
-  if (urlState.f_dist) filters.dist = urlState.f_dist.map((v) => (v === 0 ? 0 : v || null)) as [number | null, number | null];
-  if (urlState.f_dur) filters.dur = urlState.f_dur.map((v) => (v === 0 ? 0 : v || null)) as [number | null, number | null];
-  if (urlState.f_mets) filters.metrics = new Set(urlState.f_mets);
-  if (urlState.f_tags) filters.tags = urlState.f_tags;
-
-  updateFilterUI();
-
-  if (urlState.q) searchQuery = urlState.q;
-  if (urlState.re) searchRegex = urlState.re;
-  if (urlState.sort) currentSort = urlState.sort;
-  updateSearchSortUI();
+  applyState(urlState);
 
   // Load persisted tracks
   try {
@@ -741,6 +690,12 @@ async function init() {
     MapView.invalidateSize?.();
     updateToolbarLayout();
   });
+
+  // Handle back/forward navigation
+  window.addEventListener('popstate', () => {
+    UrlState.refresh();
+    applyState(UrlState.get());
+  });
 }
 
 async function processAndLoadTrack(t: TrackData) {
@@ -921,7 +876,7 @@ function selectTrack(id: string, fit = true) {
   ChartView.toggleMapColor(null); // Ensure ChartView state also resets
 
   // Clear selection on new track
-  UrlState.patch({ track: id, sel: null });
+  UrlState.patch({ track: id, sel: null }, true);
   ChartView.cancelSelection();
 
   // Update UI immediately
@@ -1143,6 +1098,83 @@ function updateSearchSortUI() {
     if (labelEl) labelEl.textContent = opt.label.replace(' first', '').replace(' distance', '').replace(' duration', '');
     if (iconEl) iconEl.textContent = opt.icon;
   }
+}
+
+function applyState(urlState: AppState) {
+  // Restore track
+  const newTrackId = urlState.track;
+  if (newTrackId !== selectedId) {
+    if (newTrackId && tracks[newTrackId]) {
+      selectTrack(newTrackId, true);
+    } else if (!newTrackId && selectedId) {
+      selectedId = null;
+      ChartView.clear();
+      renderDetails(null, []);
+      renderInsights(null);
+      renderTrackList();
+      MapView.fitAll();
+    }
+  }
+
+  // Restore basemap
+  if (urlState.map && typeof urlState.map === 'string') {
+    MapView.switchBasemap(urlState.map);
+    document
+      .querySelectorAll('.bm-btn')
+      .forEach((b) =>
+        b.classList.toggle('active', (b as HTMLElement).dataset.layer === urlState.map),
+      );
+  }
+
+  // Restore map position
+  if (urlState.map_pos) {
+    const [lat, lng, zoom] = urlState.map_pos;
+    MapView.setPosition(lat, lng, zoom);
+  }
+
+  // Restore tab
+  if (urlState.tab) {
+    document.querySelectorAll('.tab-btn').forEach((btn) => {
+      const b = btn as HTMLElement;
+      if (b.dataset.tab === urlState.tab) {
+        if (!b.classList.contains('active')) b.click();
+      }
+    });
+  }
+
+  // Restore x-axis mode
+  if (urlState.xaxis) {
+    ChartView.setXAxis(urlState.xaxis);
+  }
+  const currentXAxis = urlState.xaxis || 'time';
+  document
+    .querySelectorAll('#x-axis-ctrl .seg-btn')
+    .forEach((b) => b.classList.toggle('active', (b as HTMLElement).dataset.axis === currentXAxis));
+
+  // Restore active metrics
+  if (urlState.metrics) {
+    const metrics = ChartView.METRICS;
+    const keys = urlState.metrics
+      .map((abbr) => Object.keys(metrics).find((k) => metrics[k].abbr === abbr))
+      .filter((k): k is string => k !== undefined);
+    if (keys.length) ChartView.setActiveMetrics(keys);
+  }
+
+  // Restore filters
+  if (urlState.f_date) filters.date = urlState.f_date.map((v) => v || null) as [string | null, string | null];
+  if (urlState.f_dist) filters.dist = urlState.f_dist.map((v) => (v === 0 ? 0 : v || null)) as [number | null, number | null];
+  if (urlState.f_dur) filters.dur = urlState.f_dur.map((v) => (v === 0 ? 0 : v || null)) as [number | null, number | null];
+  if (urlState.f_mets) filters.metrics = new Set(urlState.f_mets);
+  if (urlState.f_tags) filters.tags = urlState.f_tags;
+
+  updateFilterUI();
+
+  if (urlState.q) searchQuery = urlState.q;
+  if (urlState.re) searchRegex = urlState.re;
+  if (urlState.sort) currentSort = urlState.sort;
+  updateSearchSortUI();
+
+  applyFilters();
 }
 
 function updateSportFilterOptions() {

@@ -10,20 +10,25 @@ import { Storage } from '../storage';
 import { fmtDuration, gaussianSmooth, hexToRgba } from '../utils';
 import { Metrics } from '../metrics';
 import { UrlState } from '../url-state';
+import { computeAccumulatedMetric, renderAccumulatedTable } from './accumulated_progress';
 
-export function renderEvolution(currentTrack: TrackData | null, allTracks: TrackData[], onTrackSelect?: (id: string, range: [number, number] | null) => void) {
+export function renderEvolution(currentTrack: TrackData | null, allTracks: TrackData[], onTrackSelect?: (id: string, range: [number, number] | null) => void, onDateRangeSelect?: (start: string, end: string) => void) {
   const container = document.getElementById('evolution-view');
   if (!container) return;
 
 
 
   let currentRange = UrlState.get().progress || 'all';
+  const cards: any[] = [];
   container.innerHTML = `
     <div id="evolution-toolbar" class="evolution-toolbar">
       <div class="evolution-toolbar-left">
         <div class="metric-pills">
           <button class="metric-pill active" data-target="distance" style="--pill-color:${Metrics.distance.color}; color:${Metrics.distance.color}">
             <span class="material-symbols-rounded">${Metrics.distance.icon}</span>Distance
+          </button>
+          <button class="metric-pill active" data-target="elevation" style="--pill-color:${Metrics.elevation.color}; color:${Metrics.elevation.color}">
+            <span class="material-symbols-rounded">${Metrics.elevation.icon}</span>Elevation
           </button>
           <button class="metric-pill active" data-target="power" style="--pill-color:${Metrics.power.color}; color:${Metrics.power.color}">
             <span class="material-symbols-rounded">${Metrics.power.icon}</span>Power
@@ -50,9 +55,32 @@ export function renderEvolution(currentTrack: TrackData | null, allTracks: Track
   const grid = document.getElementById('evolution-container');
   if (!grid) return;
 
-  renderDistanceProgress(grid, allTracks);
+  const progressSync = uPlot.sync('progress-sync');
+  cards.push(renderProgressCard(grid, allTracks, 'distance', progressSync, onDateRangeSelect));
+  cards.push(renderProgressCard(grid, allTracks, 'elevation', progressSync, onDateRangeSelect));
 
-  const cards: any[] = [];
+  const distanceScroll = grid.querySelector('.distance-progress-card .chart-scroll-container') as HTMLElement;
+  const elevationScroll = grid.querySelector('.elevation-progress-card .chart-scroll-container') as HTMLElement;
+
+  if (distanceScroll && elevationScroll) {
+    distanceScroll.addEventListener('scroll', () => {
+      if (elevationScroll.scrollLeft !== distanceScroll.scrollLeft) {
+        elevationScroll.scrollLeft = distanceScroll.scrollLeft;
+      }
+    });
+    elevationScroll.addEventListener('scroll', () => {
+      if (distanceScroll.scrollLeft !== elevationScroll.scrollLeft) {
+        distanceScroll.scrollLeft = elevationScroll.scrollLeft;
+      }
+    });
+    
+    // Show most recent week by default (scroll to end)
+    setTimeout(() => {
+      const maxScroll = distanceScroll.scrollWidth - distanceScroll.clientWidth;
+      distanceScroll.scrollLeft = maxScroll;
+      elevationScroll.scrollLeft = maxScroll;
+    }, 0);
+  }
 
   const toolbarRangeCtrl = container.querySelector('#evolution-time-range');
   if (toolbarRangeCtrl) {
@@ -84,7 +112,7 @@ export function renderEvolution(currentTrack: TrackData | null, allTracks: Track
   }
 
   function onRangeChange(range: string) {
-    UrlState.patch({ progress: range });
+    UrlState.patch({ progress: range === 'all' ? null : range });
     cards.forEach(c => c.updateRange(range));
   }
 
@@ -121,6 +149,9 @@ export function renderEvolution(currentTrack: TrackData | null, allTracks: Track
     });
     cards.push(card);
   }
+
+  // Apply initial range
+  cards.forEach(c => c.updateRange(currentRange));
 }
 
 interface CurveEvolutionCardOptions {
@@ -259,7 +290,7 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
     xTimeline.push((t.stats.startTime || t.addedAt)! / 1000); // seconds
     durations.forEach(d => {
       const entry = curve[d];
-      const val = entry ? ((entry as any).power || (entry as any).hr) : null;
+      const val = entry ? (metricKey === 'power' ? (entry as any).power : (entry as any).hr) : null;
       yTimelineData[d].push(val);
     });
   });
@@ -294,7 +325,7 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
     const xFiltered = filteredIndices.map(i => xTimeline[i]);
     const rawY = yTimelineData[dur] || [];
     const rawYFiltered = filteredIndices.map(i => rawY[i]);
-    const smoothedYFiltered = gaussianSmooth(rawYFiltered, 2);
+    const smoothedYFiltered = gaussianSmooth(rawYFiltered, 5);
     tracksFiltered = filteredIndices.map(i => validTracks[i]);
     
     return { xFiltered, rawYFiltered, smoothedYFiltered };
@@ -638,7 +669,9 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
                 if (pinnedDur === null) {
                   currentDur = durVal;
                   const { xFiltered, rawYFiltered, smoothedYFiltered } = getFilteredData(currentDur, currentRange);
-                  timelineChart.setData([xFiltered, rawYFiltered, smoothedYFiltered]);
+                  const lowerBound = smoothedYFiltered.map(v => v !== null ? v * 0.9 : null);
+                  const upperBound = smoothedYFiltered.map(v => v !== null ? v * 1.1 : null);
+                  timelineChart.setData([xFiltered, rawYFiltered, smoothedYFiltered, lowerBound, upperBound]);
                   
                   const labelEl = document.getElementById(`${metricKey}-timeline-label`);
                   if (labelEl) {
@@ -776,6 +809,11 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
       timelineEl.appendChild(timelineTooltip);
 
       if (xTimeline.length > 0) {
+        const { xFiltered, rawYFiltered, smoothedYFiltered } = getFilteredData(currentDur, currentRange);
+        const lowerBound = smoothedYFiltered.map(v => v !== null ? v * 0.9 : null);
+        const upperBound = smoothedYFiltered.map(v => v !== null ? v * 1.1 : null);
+        const dataTimeline = [xFiltered, rawYFiltered, smoothedYFiltered, lowerBound, upperBound];
+
         const series: any[] = [
           { value: (u: any, v: number) => {
             if (v != null) {
@@ -795,13 +833,24 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
             width: 2,
             points: { show: false },
             spanGaps: true,
-            fill: hexToRgba(color, 0.1),
+            fill: 'transparent',
             dash: [5, 5]
+          },
+          {
+            label: 'Lower Bound',
+            stroke: 'transparent',
+            width: 0,
+            points: { show: false },
+            spanGaps: true,
+          },
+          {
+            label: 'Upper Bound',
+            stroke: 'transparent',
+            width: 0,
+            points: { show: false },
+            spanGaps: true,
           }
         ];
-
-        const { xFiltered, rawYFiltered, smoothedYFiltered } = getFilteredData(currentDur, currentRange);
-        const dataTimeline = [xFiltered, rawYFiltered, smoothedYFiltered];
 
         const labelEl = document.getElementById(`${metricKey}-timeline-label`);
         if (labelEl) {
@@ -838,6 +887,9 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
             y: { range: (u: any, min: number, max: number) => [min * 0.9, max * 1.1] }
           },
           series: series,
+          bands: [
+            { series: [4, 3], fill: hexToRgba(color, 0.2) }
+          ],
           hooks: {
             init: [
               (u: uPlot) => {
@@ -1107,7 +1159,9 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
       }
       if (timelineChart) {
         const { xFiltered, rawYFiltered, smoothedYFiltered } = getFilteredData(currentDur, currentRange);
-        timelineChart.setData([xFiltered, rawYFiltered, smoothedYFiltered]);
+        const lowerBound = smoothedYFiltered.map(v => v !== null ? v * 0.9 : null);
+        const upperBound = smoothedYFiltered.map(v => v !== null ? v * 1.1 : null);
+        timelineChart.setData([xFiltered, rawYFiltered, smoothedYFiltered, lowerBound, upperBound]);
       }
       if (mainChart) {
         mainChart.redraw();
@@ -1117,7 +1171,9 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
       currentRange = range;
       if (timelineChart) {
         const { xFiltered, rawYFiltered, smoothedYFiltered } = getFilteredData(currentDur, currentRange);
-        timelineChart.setData([xFiltered, rawYFiltered, smoothedYFiltered]);
+        const lowerBound = smoothedYFiltered.map(v => v !== null ? v * 0.9 : null);
+        const upperBound = smoothedYFiltered.map(v => v !== null ? v * 1.1 : null);
+        timelineChart.setData([xFiltered, rawYFiltered, smoothedYFiltered, lowerBound, upperBound]);
       }
     }
   };
@@ -1153,46 +1209,7 @@ function computeWeeklyDistance(allTracks: TrackData[]): { week: string, timestam
     .sort((a, b) => a.timestamp - b.timestamp);
 }
 
-function computeAccumulatedDistances(allTracks: TrackData[]): { currentYear: number, pastYear: number, past6m: number, past1m: number } {
-  const now = new Date();
-  const currentYear = now.getFullYear();
-  
-  const oneYearAgo = new Date(now);
-  oneYearAgo.setFullYear(now.getFullYear() - 1);
-  
-  const sixMonthsAgo = new Date(now);
-  sixMonthsAgo.setMonth(now.getMonth() - 6);
-  
-  const oneMonthAgo = new Date(now);
-  oneMonthAgo.setMonth(now.getMonth() - 1);
-  
-  let currentYearDist = 0;
-  let pastYearDist = 0;
-  let past6mDist = 0;
-  let past1mDist = 0;
-  
-  allTracks.forEach(t => {
-    if (!t.stats.startTime || !t.stats.totalDist) return;
-    
-    const time = t.stats.startTime;
-    const date = new Date(time);
-    
-    if (date.getFullYear() === currentYear) {
-      currentYearDist += t.stats.totalDist;
-    }
-    if (time >= oneYearAgo.getTime()) {
-      pastYearDist += t.stats.totalDist;
-    }
-    if (time >= sixMonthsAgo.getTime()) {
-      past6mDist += t.stats.totalDist;
-    }
-    if (time >= oneMonthAgo.getTime()) {
-      past1mDist += t.stats.totalDist;
-    }
-  });
-  
-  return { currentYear: currentYearDist, pastYear: pastYearDist, past6m: past6mDist, past1m: past1mDist };
-}
+
 
 function computeWeeklyElevation(allTracks: TrackData[]): { week: string, timestamp: number, elevation: number }[] {
   const weeklyData: Record<string, { timestamp: number, elevation: number }> = {};
@@ -1215,284 +1232,362 @@ function computeWeeklyElevation(allTracks: TrackData[]): { week: string, timesta
     .sort((a, b) => a.timestamp - b.timestamp);
 }
 
-function computeAccumulatedElevations(allTracks: TrackData[]): { currentYear: number, pastYear: number, past6m: number, past1m: number } {
-  const now = new Date();
-  const currentYear = now.getFullYear();
-  
-  const oneYearAgo = new Date(now);
-  oneYearAgo.setFullYear(now.getFullYear() - 1);
-  
-  const sixMonthsAgo = new Date(now);
-  sixMonthsAgo.setMonth(now.getMonth() - 6);
-  
-  const oneMonthAgo = new Date(now);
-  oneMonthAgo.setMonth(now.getMonth() - 1);
-  
-  let currentYearElev = 0;
-  let pastYearElev = 0;
-  let past6mElev = 0;
-  let past1mElev = 0;
-  
-  allTracks.forEach(t => {
-    if (!t.stats.startTime || t.stats.elevGain === undefined) return;
-    
-    const time = t.stats.startTime;
-    const date = new Date(time);
-    
-    if (date.getFullYear() === currentYear) {
-      currentYearElev += t.stats.elevGain;
-    }
-    if (time >= oneYearAgo.getTime()) {
-      pastYearElev += t.stats.elevGain;
-    }
-    if (time >= sixMonthsAgo.getTime()) {
-      past6mElev += t.stats.elevGain;
-    }
-    if (time >= oneMonthAgo.getTime()) {
-      past1mElev += t.stats.elevGain;
-    }
-  });
-  
-  return { currentYear: currentYearElev, pastYear: pastYearElev, past6m: past6mElev, past1m: past1mElev };
-}
 
-function renderDistanceProgress(grid: HTMLElement, allTracks: TrackData[]) {
-  const weeklyDistance = computeWeeklyDistance(allTracks);
-  const accumulatedDistance = computeAccumulatedDistances(allTracks);
-  const weeklyElevation = computeWeeklyElevation(allTracks);
-  const accumulatedElevation = computeAccumulatedElevations(allTracks);
-  
+
+function renderProgressCard(grid: HTMLElement, allTracks: TrackData[], type: 'distance' | 'elevation', syncKey?: any, onDateRangeSelect?: (start: string, end: string) => void) {
+  const isDistance = type === 'distance';
+  const weeklyData = isDistance ? computeWeeklyDistance(allTracks) : computeWeeklyElevation(allTracks);
+  const accumulated = computeAccumulatedMetric(allTracks, t => isDistance ? t.stats.totalDist : t.stats.elevGain);
+  const color = isDistance ? Metrics.distance.color : Metrics.elevation.color;
+  const unit = isDistance ? 'km' : 'm';
+  const icon = isDistance ? Metrics.distance.icon : Metrics.elevation.icon;
+
   const cardContainer = document.createElement('div');
-  cardContainer.className = 'chart-row distance-progress-card';
-  cardContainer.id = 'distance-evolution-card';
-  
+  cardContainer.className = `chart-row ${type}-progress-card`;
+  cardContainer.id = `${type}-evolution-card`;
+
   cardContainer.innerHTML = `
     <div class="chart-row-header">
       <div class="chart-row-label-group">
-        <span class="material-symbols-rounded chart-row-icon" id="progress-icon" style="--chart-color:${Metrics.distance.color}">${Metrics.distance.icon}</span>
-        <span class="chart-row-label" id="progress-label">Distance Progress</span>
-      </div>
-      <div class="segmented-control" style="margin-left: auto;">
-        <button class="seg-btn active" data-type="distance">Distance</button>
-        <button class="seg-btn" data-type="elevation">Elevation</button>
+        <span class="material-symbols-rounded chart-row-icon" id="progress-icon" style="--chart-color:${color}">${icon}</span>
+        <span class="chart-row-label" id="progress-label">${isDistance ? 'Distance Progress' : 'Elevation Progress'}</span>
       </div>
     </div>
     <div class="card-content" style="display: flex;">
-      <div id="distance-y-axis-chart" style="width: 50px;"></div>
+      <div id="${type}-y-axis-chart" style="width: 50px;"></div>
       <div class="chart-scroll-container" style="flex: 1; overflow-x: auto; position: relative;">
-        <div id="distance-weekly-chart"></div>
+        <div id="${type}-weekly-chart"></div>
       </div>
-      <div class="accumulated-table-container" style="width: 250px; margin-left: 20px;">
-        <table class="accumulated-table">
-          <thead>
-            <tr><th>Period</th><th id="table-metric-header">Distance</th></tr>
-          </thead>
-          <tbody id="accumulated-table-body">
-          </tbody>
-        </table>
+      <div class="accumulated-table-container" style="width: 320px; margin-left: 20px;">
+        ${renderAccumulatedTable(accumulated, isDistance, unit)}
       </div>
     </div>
   `;
-  
+
   grid.appendChild(cardContainer);
-  
-  const chartEl = cardContainer.querySelector('#distance-weekly-chart') as HTMLElement;
-  const yAxisEl = cardContainer.querySelector('#distance-y-axis-chart') as HTMLElement;
-  const iconEl = cardContainer.querySelector('#progress-icon') as HTMLElement;
-  const labelEl = cardContainer.querySelector('#progress-label') as HTMLElement;
-  const tableHeaderEl = cardContainer.querySelector('#table-metric-header') as HTMLElement;
-  const tableBodyEl = cardContainer.querySelector('#accumulated-table-body') as HTMLElement;
-  
+
+  const chartEl = cardContainer.querySelector(`#${type}-weekly-chart`) as HTMLElement;
+  const yAxisEl = cardContainer.querySelector(`#${type}-y-axis-chart`) as HTMLElement;
+
   if (!chartEl || !yAxisEl) return;
-  
+
   chartEl.style.position = 'relative';
+  
+  // Use inline tooltip style
   const tooltip = document.createElement('div');
-  tooltip.className = 'timeline-tooltip font-m';
-  tooltip.style.cssText = `position:absolute;background:rgba(14, 14, 16, 0.9);color:#fff;padding:8px 12px;border-radius:4px;font-family:system-ui;pointer-events:none;z-index:1000;box-shadow:0 4px 6px rgba(0,0,0,0.3);border:1px solid #2e2e34;display:none;`;
+  tooltip.className = 'cur-y-val';
+  tooltip.style.cssText = `color:${color};display:none`;
   chartEl.appendChild(tooltip);
-  
-  let currentChart: uPlot | null = null;
-  let currentYAxisChart: uPlot | null = null;
-  
-  function updateUI(type: 'distance' | 'elevation') {
-    const isDistance = type === 'distance';
-    const weeklyData = isDistance ? weeklyDistance : weeklyElevation;
-    const accumulated = isDistance ? accumulatedDistance : accumulatedElevation;
-    const color = isDistance ? Metrics.distance.color : Metrics.elevation.color;
-    const unit = isDistance ? 'km' : 'm';
-    const icon = isDistance ? Metrics.distance.icon : Metrics.elevation.icon;
-    
-    // Update header
-    iconEl.textContent = icon;
-    iconEl.style.setProperty('--chart-color', color);
-    labelEl.textContent = isDistance ? 'Distance Progress' : 'Elevation Progress';
-    
-    // Update table
-    tableHeaderEl.textContent = isDistance ? 'Distance' : 'Elevation';
-    tableBodyEl.innerHTML = `
-      <tr><td>Current Year</td><td>${isDistance ? (accumulated.currentYear / 1000).toFixed(1) : accumulated.currentYear.toFixed(0)} ${unit}</td></tr>
-      <tr><td>Past Year</td><td>${isDistance ? (accumulated.pastYear / 1000).toFixed(1) : accumulated.pastYear.toFixed(0)} ${unit}</td></tr>
-      <tr><td>Past 6 Months</td><td>${isDistance ? (accumulated.past6m / 1000).toFixed(1) : accumulated.past6m.toFixed(0)} ${unit}</td></tr>
-      <tr><td>Past 1 Month</td><td>${isDistance ? (accumulated.past1m / 1000).toFixed(1) : accumulated.past1m.toFixed(0)} ${unit}</td></tr>
-    `;
-    
-    const xData = weeklyData.map(d => d.timestamp / 1000);
-    const yData = isDistance 
-      ? (weeklyData as any[]).map(d => d.distance / 1000)
-      : (weeklyData as any[]).map(d => d.elevation);
-    
-    if (xData.length === 0) return;
-    
-    const width = Math.max(chartEl.clientWidth, xData.length * 40);
-    const maxVal = Math.max(...yData) * 1.1;
-    
-    const yAxisOpts: uPlot.Options = {
-      width: 50,
-      height: 150,
-      scales: {
-        x: { time: true },
-        y: { range: [0, maxVal] }
-      },
-      series: [
-        {},
-        { show: false }
-      ],
-      axes: [
-        { show: false },
-        {
-          stroke: '#555564',
-          grid: { stroke: '#2e2e34', width: 1 },
-          show: true,
-          values: (self, splits) => splits.map(s => `${s.toFixed(0)} ${unit}`),
-          font: '10px system-ui, sans-serif',
-          size: 40,
-        }
-      ]
-    };
-    
-    const mainOpts: uPlot.Options = {
-      width: width,
-      height: 150,
-      scales: {
-        x: { time: true },
-        y: { range: [0, maxVal] }
-      },
-      series: [
-        {},
-        {
-          label: isDistance ? 'Distance' : 'Elevation',
-          stroke: color,
-          fill: hexToRgba(color, 0.1),
-          width: 2,
-          points: { show: true, size: 4 }
-        }
-      ],
-      cursor: {
-        drag: { x: false, y: false },
-        points: { show: false },
-        x: false,
-        y: false,
-      },
-      hooks: {
-        setCursor: [
-          (u: uPlot) => {
-            const idx = u.cursor.idx;
-            const cursorLeft = u.cursor.left;
-            const cursorTop = u.cursor.top;
+
+  const xData = weeklyData.map(d => d.timestamp / 1000);
+  const yData = isDistance 
+    ? (weeklyData as any[]).map(d => d.distance / 1000)
+    : (weeklyData as any[]).map(d => d.elevation);
+
+  if (xData.length === 0) return;
+
+  const yDataSmoothed = gaussianSmooth(yData, 2);
+
+  const width = Math.max(chartEl.clientWidth, xData.length * 40);
+  const maxVal = Math.max(...yData) * 1.1;
+
+  const yAxisOpts: uPlot.Options = {
+    width: 50,
+    height: 150,
+    scales: {
+      x: { time: true },
+      y: { range: [0, maxVal] }
+    },
+    series: [
+      {},
+      { show: false }
+    ],
+    axes: [
+      { show: false },
+      {
+        stroke: '#555564',
+        grid: { stroke: '#2e2e34', width: 1 },
+        show: true,
+        values: (self, splits) => splits.map(s => `${s.toFixed(0)} ${unit}`),
+        font: '10px system-ui, sans-serif',
+        size: 40,
+      }
+    ],
+    cursor: {
+      sync: syncKey ? { key: syncKey.key } : undefined,
+      drag: { x: false, y: false },
+      points: { show: false },
+      x: false,
+      y: false,
+    },
+    hooks: {
+      draw: [
+        (u: uPlot) => {
+          const idx = u.cursor.idx;
+          if (idx != null && u.data[1][idx] != null) {
+            const pcy = u.valToPos(u.data[1][idx]!, 'y', true);
+            const dpr = window.devicePixelRatio || 1;
+            const ctx = u.ctx;
             const bb = u.bbox;
             
-            if (idx != null && cursorLeft != null && cursorTop != null && cursorLeft >= 0 && cursorTop >= 0) {
-              const d = new Date(u.data[0][idx]! * 1000);
-              const dateStr = `Week of ${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-              const val = u.data[1][idx];
-              const valStr = val != null ? (isDistance ? `${val.toFixed(1)} km` : `${val.toFixed(0)} m`) : '—';
-              
-              tooltip.innerHTML = `
-                <div class="evolution-tooltip-row">
-                  <span class="evolution-tooltip-label">Date:</span>
-                  <span class="evolution-tooltip-value">${dateStr}</span>
-                </div>
-                <div class="evolution-tooltip-row">
-                  <span class="evolution-tooltip-label">${isDistance ? 'Distance:' : 'Elevation:'}</span>
-                  <span class="evolution-tooltip-value">${valStr}</span>
-                </div>
-              `;
-              tooltip.style.display = 'block';
-              tooltip.style.left = `${cursorLeft! + bb.left}px`;
-              tooltip.style.top = `${cursorTop! + bb.top}px`;
-              tooltip.style.transform = `translate(5px, -50%)`;
-            } else {
-              tooltip.style.display = 'none';
-            }
+            ctx.save();
+            ctx.setLineDash([]);
+            
+            const yVal = u.data[1][idx]!;
+            const yValStr = isDistance ? `${yVal.toFixed(1)} km` : `${yVal.toFixed(0)} m`;
+            ctx.font = `bold ${10 * dpr}px system-ui, sans-serif`;
+            const yValWidth = ctx.measureText(yValStr).width;
+            const ybw = yValWidth + 10 * dpr;
+            const pillH = 16 * dpr;
+            
+            const yLabelX = bb.left + bb.width - ybw - 2 * dpr; // Flush to the right edge of Y axis area
+            const yLabelY = pcy - pillH / 2;
+            
+            ctx.fillStyle = 'rgba(14, 14, 16, 0.92)';
+            ctx.beginPath();
+            if ((ctx as any).roundRect) (ctx as any).roundRect(yLabelX, yLabelY, ybw, pillH, 3 * dpr);
+            else ctx.rect(yLabelX, yLabelY, ybw, pillH);
+            ctx.fill();
+            ctx.strokeStyle = hexToRgba(color, 0.27);
+            ctx.lineWidth = 1 * dpr;
+            ctx.stroke();
+            
+            ctx.fillStyle = color;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(yValStr, yLabelX + 5 * dpr, yLabelY + pillH / 2);
+            
+            ctx.restore();
           }
-        ],
-        draw: [
-          (u: uPlot) => {
-            const idx = u.cursor.idx;
-            if (idx != null && u.data[0][idx] != null) {
-              const tpcx = u.valToPos(u.data[0][idx]!, 'x', true);
-              const tdpr = window.devicePixelRatio || 1;
-              const tctx = u.ctx;
-              
-              tctx.save();
-              tctx.beginPath();
-              tctx.strokeStyle = hexToRgba(color, 0.2);
-              tctx.lineWidth = 10 * tdpr;
-              tctx.moveTo(tpcx, u.bbox.top);
-              tctx.lineTo(tpcx, u.bbox.top + u.bbox.height);
-              tctx.stroke();
-              tctx.restore();
-            }
-          }
-        ]
-      },
-      axes: [
-        {
-          stroke: '#555564',
-          grid: { stroke: '#2e2e34', width: 1 },
-          show: true,
-          space: 40,
-          values: (self, splits) => splits.map(s => {
-            const d = new Date(s * 1000);
-            return `${d.getMonth() + 1}/${d.getDate()}`;
-          }),
-          font: '10px system-ui, sans-serif',
-          size: 30,
-        },
-        {
-          stroke: '#555564',
-          grid: { stroke: '#2e2e34', width: 1 },
-          show: true,
-          values: () => [],
-          ticks: { show: false },
-          size: 0,
         }
       ]
-    };
-    
-    currentChart?.destroy();
-    currentYAxisChart?.destroy();
-    
-    currentYAxisChart = new uPlot(yAxisOpts, [xData, yData], yAxisEl);
-    currentChart = new uPlot(mainOpts, [xData, yData], chartEl);
-    
-    const scrollContainer = cardContainer.querySelector('.chart-scroll-container') as HTMLElement;
-    if (scrollContainer) {
-      scrollContainer.scrollLeft = scrollContainer.scrollWidth - scrollContainer.clientWidth;
     }
+  };
+
+  const mainOpts: uPlot.Options = {
+    width: width,
+    height: 150,
+    scales: {
+      x: { time: true },
+      y: { range: [0, maxVal] }
+    },
+    series: [
+      {},
+      {
+        label: isDistance ? 'Distance' : 'Elevation',
+        stroke: color,
+        fill: hexToRgba(color, 0.1),
+        width: 2,
+        points: { show: true, size: 4 }
+      },
+      {
+        label: 'Trend',
+        stroke: color,
+        width: 2,
+        dash: [5, 5],
+        points: { show: false }
+      }
+    ],
+    cursor: {
+      sync: syncKey ? { key: syncKey.key } : undefined,
+      drag: { x: false, y: false },
+      points: { show: false },
+      x: false,
+      y: false,
+    },
+    hooks: {
+      init: [
+        (u: uPlot) => {
+          u.over.addEventListener('click', () => {
+            const idx = u.cursor.idx;
+            if (idx != null) {
+              const item = weeklyData[idx];
+              if (item) {
+                const start = new Date(item.timestamp);
+                const end = new Date(item.timestamp + 7 * 24 * 60 * 60 * 1000); // End of week
+                const startStr = start.toISOString().split('T')[0];
+                const endStr = end.toISOString().split('T')[0];
+                onDateRangeSelect?.(startStr, endStr);
+              }
+            }
+          });
+        }
+      ],
+      setCursor: [
+        (u: uPlot) => {
+          const idx = u.cursor.idx;
+          const cursorLeft = u.cursor.left;
+          const cursorTop = u.cursor.top;
+          
+          if (idx != null && cursorLeft != null && cursorTop != null && cursorLeft >= 0 && cursorTop >= 0) {
+            const val = u.data[1][idx];
+            const valStr = val != null ? (isDistance ? `${val.toFixed(1)} km` : `${val.toFixed(0)} m`) : '—';
+            
+            tooltip.innerHTML = valStr;
+            tooltip.style.display = 'block';
+            tooltip.style.left = `${u.valToPos(u.data[0][idx]!, 'x', false)}px`;
+            tooltip.style.top = `${u.valToPos(u.data[1][idx]!, 'y', false)}px`;
+            tooltip.style.transform = `translate(6px, -50%)`;
+          } else {
+            tooltip.style.display = 'none';
+          }
+          
+          u.redraw(false);
+        }
+      ],
+      draw: [
+        (u: uPlot) => {
+          const idx = u.cursor.idx;
+          if (idx != null && u.data[0][idx] != null) {
+            const pcx = u.valToPos(u.data[0][idx]!, 'x', true);
+            const pcy = u.valToPos(u.data[1][idx]!, 'y', true);
+            const dpr = window.devicePixelRatio || 1;
+            const ctx = u.ctx;
+            const bb = u.bbox;
+            
+            // Draw lines
+            ctx.save();
+            ctx.beginPath();
+            ctx.setLineDash([2 * dpr, 2 * dpr]);
+            ctx.strokeStyle = hexToRgba(color, 0.4);
+            ctx.lineWidth = 1 * dpr;
+            // Vertical line
+            ctx.moveTo(pcx, bb.top);
+            ctx.lineTo(pcx, bb.top + bb.height);
+            // Horizontal line
+            ctx.moveTo(bb.left, pcy);
+            ctx.lineTo(bb.left + bb.width, pcy);
+            ctx.stroke();
+            ctx.restore();
+            
+            // Draw hover halo
+            ctx.save();
+            ctx.beginPath();
+            ctx.setLineDash([]); // Reset to solid
+            ctx.arc(pcx, pcy, 12 * dpr, 0, 2 * Math.PI);
+            ctx.fillStyle = hexToRgba(color, 0.2);
+            ctx.fill();
+            ctx.restore();
+
+            // Draw center circle
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(pcx, pcy, 6 * dpr, 0, 2 * Math.PI);
+            ctx.fillStyle = color;
+            ctx.fill();
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2 * dpr;
+            ctx.stroke();
+            ctx.restore();
+            
+            // Draw axis labels
+            ctx.save();
+            ctx.setLineDash([]); // Reset to solid
+            
+            // X Label Pill
+            const d = new Date(u.data[0][idx]! * 1000);
+            const xValStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            ctx.font = `bold ${10 * dpr}px system-ui, sans-serif`;
+            const xValWidth = ctx.measureText(xValStr).width;
+            const xbw = xValWidth + 10 * dpr;
+            const pillH = 16 * dpr;
+            
+            const xLabelX = pcx - xbw / 2;
+            const clampedXBx = Math.max(bb.left, Math.min(bb.left + bb.width - xbw, xLabelX));
+            const xLabelY = bb.top + bb.height + 2 * dpr;
+            
+            ctx.fillStyle = 'rgba(14, 14, 16, 0.92)';
+            ctx.beginPath();
+            if ((ctx as any).roundRect) (ctx as any).roundRect(clampedXBx, xLabelY, xbw, pillH, 3 * dpr);
+            else ctx.rect(clampedXBx, xLabelY, xbw, pillH);
+            ctx.fill();
+            ctx.strokeStyle = hexToRgba(color, 0.27);
+            ctx.lineWidth = 1 * dpr;
+            ctx.stroke();
+            
+            ctx.fillStyle = color;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(xValStr, clampedXBx + xbw / 2, xLabelY + pillH / 2);
+            
+            ctx.restore();
+          }
+        }
+      ]
+    },
+    axes: [
+      {
+        stroke: '#555564',
+        grid: { stroke: '#2e2e34', width: 1 },
+        show: true,
+        space: 40,
+        values: (self, splits) => splits.map(s => {
+          const d = new Date(s * 1000);
+          return `${d.getMonth() + 1}/${d.getDate()}`;
+        }),
+        font: '10px system-ui, sans-serif',
+        size: 30,
+      },
+      {
+        stroke: '#555564',
+        grid: { stroke: '#2e2e34', width: 1 },
+        show: true,
+        values: () => [],
+        ticks: { show: false },
+        size: 0,
+      }
+    ]
+  };
+
+  const yAxisChart = new uPlot(yAxisOpts, [xData, yData], yAxisEl);
+  const mainChart = new uPlot(mainOpts, [xData, yData, yDataSmoothed], chartEl);
+
+  const scrollContainer = cardContainer.querySelector('.chart-scroll-container') as HTMLElement;
+  if (scrollContainer) {
+    scrollContainer.scrollLeft = scrollContainer.scrollWidth - scrollContainer.clientWidth;
   }
-  
-  updateUI('distance');
-  
-  const buttons = cardContainer.querySelectorAll('.segmented-control .seg-btn');
-  buttons.forEach(btn => {
-    btn.addEventListener('click', () => {
-      buttons.forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      const type = btn.getAttribute('data-type') as 'distance' | 'elevation';
-      updateUI(type);
-    });
-  });
+
+  return {
+    updateRange: (range: string) => {
+      const maxTime = weeklyData[weeklyData.length - 1]?.timestamp || (Date.now());
+      let minTime = 0;
+      
+      if (range === '1m') {
+        minTime = maxTime - 30 * 24 * 3600 * 1000;
+      } else if (range === '2m') {
+        minTime = maxTime - 60 * 24 * 3600 * 1000;
+      } else if (range === '6m') {
+        minTime = maxTime - 180 * 24 * 3600 * 1000;
+      } else if (range === '1y') {
+        minTime = maxTime - 365 * 24 * 3600 * 1000;
+      } else if (range === '2y') {
+        minTime = maxTime - 2 * 365 * 24 * 3600 * 1000;
+      }
+      
+      const filteredData = weeklyData.filter(d => d.timestamp >= minTime);
+      
+      const newXData = filteredData.map(d => d.timestamp / 1000);
+      const newYData = isDistance 
+        ? (filteredData as any[]).map(d => d.distance / 1000)
+        : (filteredData as any[]).map(d => d.elevation);
+      const newYDataSmoothed = gaussianSmooth(newYData, 2);
+      
+      const newWidth = Math.max(chartEl.clientWidth, newXData.length * 40);
+      const newMaxVal = Math.max(...newYData) * 1.1;
+      
+      mainChart.setSize({ width: newWidth, height: 150 });
+      
+      yAxisChart.setScale('y', { min: 0, max: newMaxVal });
+      mainChart.setScale('y', { min: 0, max: newMaxVal });
+      
+      yAxisChart.setData([newXData, newYData]);
+      mainChart.setData([newXData, newYData, newYDataSmoothed]);
+      
+      if (scrollContainer) {
+        scrollContainer.scrollLeft = scrollContainer.scrollWidth - scrollContainer.clientWidth;
+      }
+    }
+  };
 }
 
 

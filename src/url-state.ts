@@ -33,6 +33,7 @@ export const UrlState = (() => {
   let _state: AppState = {};
   let _lastSearch: string | null = null;
   let _syncTimeout: any = null;
+  let _shouldPush = false;
 
   function read(): AppState {
     const p = new URLSearchParams(location.search);
@@ -152,7 +153,12 @@ export const UrlState = (() => {
 
       if (search !== _lastSearch) {
         const url = location.pathname + (search ? '?' + search : '');
-        history.replaceState(null, '', url);
+        if (_shouldPush) {
+          history.pushState(null, '', url);
+          _shouldPush = false;
+        } else {
+          history.replaceState(null, '', url);
+        }
         _lastSearch = search;
       }
       _syncTimeout = null;
@@ -166,7 +172,8 @@ export const UrlState = (() => {
     return { ..._state };
   }
 
-  function patch(partial: Partial<Record<keyof AppState, any>>) {
+  function patch(partial: Partial<Record<keyof AppState, any>>, push: boolean = false) {
+    if (push) _shouldPush = true;
     for (const [k, v] of Object.entries(partial)) {
       const key = k as keyof AppState;
       if (v === null || v === undefined) {
@@ -178,5 +185,9 @@ export const UrlState = (() => {
     _sync();
   }
 
-  return { get, patch };
+  function refresh() {
+    _state = read();
+  }
+
+  return { get, patch, refresh };
 })();

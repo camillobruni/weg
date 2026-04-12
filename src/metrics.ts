@@ -24,7 +24,7 @@ export const Metrics = {
   cadence: { name: 'Cadence', color: '#BB8FCE', icon: 'directions_run' },
   temperature: { name: 'Temperature', color: '#F8C471', icon: 'thermostat' },
   elevation: { name: 'Elevation', color: '#4ECDC4', icon: 'terrain' },
-  distance: { name: 'Distance', color: '#45B7D1', icon: 'timeline' },
+  distance: { name: 'Distance', color: '#9f1bfdff', icon: 'arrow_range' },
   gearRear: { name: 'Rear Gear', color: '#82E0AA', icon: 'settings' },
   gearFront: { name: 'Front Gear', color: '#A8C8A0', icon: 'settings_input_component' },
   gears: { name: 'Gears', color: '#FF8C00', icon: 'settings' },
