@@ -8,7 +8,7 @@
 
 import { Storage } from './storage';
 import { UrlState } from './url-state';
-import { Parsers, TrackData, TrackPoint, calculateBounds } from './parsers';
+import { Parsers, TrackData, TrackPoint, calculateBounds, simplifyTrack } from './parsers';
 import { MapView } from './map';
 import { ChartView } from './charts';
 import { renderDetails, initDetails } from './tabs/details';
@@ -411,12 +411,20 @@ async function init() {
     if (mapLoaderSpan) mapLoaderSpan.textContent = `Preparing ${saved.length} tracks...`;
 
     for (const t of saved) {
+      let updated = false;
       if (!t.bounds && t.points.length > 0) {
         const b = calculateBounds(t.points);
         if (b) {
           t.bounds = b;
-          await Storage.save(t);
+          updated = true;
         }
+      }
+      if (!t.simplifiedPoints && t.points.length > 0) {
+        t.simplifiedPoints = simplifyTrack(t.points, 50);
+        updated = true;
+      }
+      if (updated) {
+        await Storage.save(t);
       }
       tracks[t.id] = t;
     }
@@ -1449,6 +1457,7 @@ async function handleFiles(files: File[]) {
           name: trackName,
           displayName,
           bounds: calculateBounds(data.points) || undefined,
+          simplifiedPoints: simplifyTrack(data.points, 50), // 50m resolution
           addedAt: Date.now(),
           visible: true,
           color: TRACK_COLORS[colorIdx % TRACK_COLORS.length],
