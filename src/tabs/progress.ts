@@ -8,32 +8,77 @@ import uPlot from 'uplot';
 import { TrackData } from '../parsers';
 import { Storage } from '../storage';
 import { fmtDuration, gaussianSmooth, hexToRgba } from '../utils';
-import { Colors } from '../colors';
+import { Metrics } from '../metrics';
 import { UrlState } from '../url-state';
 
 export function renderEvolution(currentTrack: TrackData | null, allTracks: TrackData[], onTrackSelect?: (id: string, range: [number, number] | null) => void) {
   const container = document.getElementById('evolution-view');
   if (!container) return;
 
-  if (!currentTrack) {
-    container.innerHTML = `
-      <div class="empty-state">
-        <span class="material-symbols-rounded empty-icon">no_sim</span>
-        <div class="empty-text">Select a track for evolution analysis</div>
-      </div>
-    `;
-    return;
-  }
 
+
+  let currentRange = UrlState.get().progress || 'all';
   container.innerHTML = `
-    <div id="evolution-container" style="display: flex; flex-direction: column; gap: 0px;"></div>
+    <div id="evolution-toolbar" class="evolution-toolbar">
+      <div class="evolution-toolbar-left">
+        <div class="metric-pills">
+          <button class="metric-pill active" data-target="distance" style="--pill-color:${Metrics.distance.color}; color:${Metrics.distance.color}">
+            <span class="material-symbols-rounded">${Metrics.distance.icon}</span>Distance
+          </button>
+          <button class="metric-pill active" data-target="power" style="--pill-color:${Metrics.power.color}; color:${Metrics.power.color}">
+            <span class="material-symbols-rounded">${Metrics.power.icon}</span>Power
+          </button>
+          <button class="metric-pill active" data-target="hr" style="--pill-color:${Metrics.hr.color}; color:${Metrics.hr.color}">
+            <span class="material-symbols-rounded">${Metrics.hr.icon}</span>Heart Rate
+          </button>
+        </div>
+      </div>
+      <div class="evolution-toolbar-right">
+        <div class="seg-ctrl" id="evolution-time-range">
+          <button class="seg-btn ${currentRange === '1m' ? 'active' : ''}" data-range="1m">1M</button>
+          <button class="seg-btn ${currentRange === '2m' ? 'active' : ''}" data-range="2m">2M</button>
+          <button class="seg-btn ${currentRange === '6m' ? 'active' : ''}" data-range="6m">6M</button>
+          <button class="seg-btn ${currentRange === '1y' ? 'active' : ''}" data-range="1y">1Y</button>
+          <button class="seg-btn ${currentRange === '2y' ? 'active' : ''}" data-range="2y">2Y</button>
+          <button class="seg-btn ${currentRange === 'all' ? 'active' : ''}" data-range="all">&infin;</button>
+        </div>
+      </div>
+    </div>
+    <div id="evolution-container" class="evolution-container"></div>
   `;
 
   const grid = document.getElementById('evolution-container');
   if (!grid) return;
 
+  renderDistanceProgress(grid, allTracks);
+
   const cards: any[] = [];
-  
+
+  const toolbarRangeCtrl = container.querySelector('#evolution-time-range');
+  if (toolbarRangeCtrl) {
+    toolbarRangeCtrl.querySelectorAll('.seg-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const range = btn.getAttribute('data-range');
+        if (range) {
+          toolbarRangeCtrl.querySelectorAll('.seg-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          onRangeChange(range);
+        }
+      });
+    });
+  }
+
+  const pills = container.querySelectorAll('.metric-pill');
+  pills.forEach(pill => {
+    pill.addEventListener('click', () => {
+      const target = pill.getAttribute('data-target');
+      if (target) {
+        const targetEl = document.getElementById(`${target}-evolution-card`);
+        targetEl?.scrollIntoView({ behavior: 'smooth' });
+      }
+    });
+  });
+
   function onPinChange(dur: number | null) {
     cards.forEach(c => c.updatePin(dur));
   }
@@ -43,7 +88,7 @@ export function renderEvolution(currentTrack: TrackData | null, allTracks: Track
     cards.forEach(c => c.updateRange(range));
   }
 
-  if (currentTrack.stats.powerCurve) {
+  if (allTracks.some(t => t.stats.powerCurve)) {
     const card = renderCurveEvolutionCard({
       grid,
       currentTrack,
@@ -51,7 +96,7 @@ export function renderEvolution(currentTrack: TrackData | null, allTracks: Track
       metricKey: 'power',
       label: 'Power Curve Progress',
       unit: 'W',
-      color: Colors.power,
+      color: Metrics.power.color,
       icon: 'bolt',
       onPinChange,
       onRangeChange,
@@ -60,7 +105,7 @@ export function renderEvolution(currentTrack: TrackData | null, allTracks: Track
     cards.push(card);
   }
 
-  if (currentTrack.stats.hrCurve) {
+  if (allTracks.some(t => t.stats.hrCurve)) {
     const card = renderCurveEvolutionCard({
       grid,
       currentTrack,
@@ -68,7 +113,7 @@ export function renderEvolution(currentTrack: TrackData | null, allTracks: Track
       metricKey: 'hr',
       label: 'Heart Rate Curve Progress',
       unit: 'bpm',
-      color: Colors.hr,
+      color: Metrics.hr.color,
       icon: 'favorite',
       onPinChange,
       onRangeChange,
@@ -76,16 +121,11 @@ export function renderEvolution(currentTrack: TrackData | null, allTracks: Track
     });
     cards.push(card);
   }
-
-  // Add separator after both sections
-  const separator = document.createElement('div');
-  separator.style.cssText = 'width: 100%; height: 1px; background-color: rgba(255, 255, 255, 0.1); margin: 20px 0;';
-  grid.appendChild(separator);
 }
 
 interface CurveEvolutionCardOptions {
   grid: HTMLElement;
-  currentTrack: TrackData;
+  currentTrack: TrackData | null;
   allTracks: TrackData[];
   metricKey: 'power' | 'hr';
   label: string;
@@ -104,6 +144,11 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
 
   let mainChart: uPlot | null = null;
 
+  const cardContainer = document.createElement('div');
+  cardContainer.className = 'chart-row evolution-card-group';
+  cardContainer.id = `${metricKey}-evolution-card`;
+  grid.appendChild(cardContainer);
+
   const row1 = document.createElement('div');
   row1.className = 'chart-row progress-chart-row';
   row1.style.setProperty('--chart-color', color);
@@ -116,21 +161,20 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
         <span class="chart-row-label">${label}</span>
       </div>
     </div>
-    <div class="chart-row-body" style="padding: 0;">
-      <div id="${metricKey}-evolution-chart" class="insight-chart-container" style="height: 250px; flex: 1;"></div>
+    <div class="chart-row-body">
+      <div id="${metricKey}-evolution-chart" class="insight-chart-container evolution-chart-container"></div>
     </div>
   `;
 
   const legendEl = document.createElement('div');
   legendEl.className = 'evolution-legend';
-  legendEl.style.cssText = 'display:flex; gap:16px; font-size:12px; color:var(--text-dim); margin-top:0px; margin-bottom:0px; justify-content:center';
   legendEl.innerHTML = `
-    <div style="display:flex; align-items:center; gap:6px">
-      <span style="width:16px; height:0; border-top:2px solid ${color}; display:inline-block"></span>
+    <div class="evolution-legend-item">
+      <span class="evolution-legend-line solid" style="--chart-color:${color}"></span>
       <span>${trackName}</span>
     </div>
-    <div style="display:flex; align-items:center; gap:6px">
-      <span style="width:16px; height:0; border-top:2px dashed #888888; display:inline-block"></span>
+    <div class="evolution-legend-item">
+      <span class="evolution-legend-line dashed"></span>
       <span>All-Time Max</span>
     </div>
   `;
@@ -149,19 +193,9 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
         <span class="material-symbols-rounded chart-row-icon" style="--chart-color:${color}">${icon}</span>
         <span class="chart-row-label" id="${metricKey}-timeline-label">Progress ${metricKey === 'power' ? 'Power' : 'HR'}</span>
       </div>
-      <div class="chart-row-actions" style="margin-left: auto;">
-        <div class="seg-ctrl" id="${metricKey}-time-range">
-          <button class="seg-btn ${currentRange === '1m' ? 'active' : ''}" data-range="1m">1M</button>
-          <button class="seg-btn ${currentRange === '2m' ? 'active' : ''}" data-range="2m">2M</button>
-          <button class="seg-btn ${currentRange === '6m' ? 'active' : ''}" data-range="6m">6M</button>
-          <button class="seg-btn ${currentRange === '1y' ? 'active' : ''}" data-range="1y">1Y</button>
-          <button class="seg-btn ${currentRange === '2y' ? 'active' : ''}" data-range="2y">2Y</button>
-          <button class="seg-btn ${currentRange === 'all' ? 'active' : ''}" data-range="all">&infin;</button>
-        </div>
-      </div>
     </div>
-    <div class="chart-row-body" style="padding: 0;">
-      <div id="${metricKey}-timeline-chart" class="insight-chart-container" style="height: 250px; flex: 1;"></div>
+    <div class="chart-row-body">
+      <div id="${metricKey}-timeline-chart" class="insight-chart-container evolution-chart-container"></div>
     </div>
   `;
 
@@ -170,8 +204,8 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
   sideBySide.appendChild(row1);
   sideBySide.appendChild(row2);
   
-  grid.appendChild(sideBySide);
-  grid.appendChild(legendEl);
+  cardContainer.appendChild(sideBySide);
+  cardContainer.appendChild(legendEl);
 
   const chartEl = row1.querySelector(`#${metricKey}-evolution-chart`) as HTMLElement;
   if (!chartEl) return;
@@ -195,7 +229,7 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
   });
 
   // 2. Get current track curve
-  const currentCurve = (metricKey === 'power' ? currentTrack.stats.powerCurve : currentTrack.stats.hrCurve) || {};
+  const currentCurve = (currentTrack && (metricKey === 'power' ? currentTrack.stats.powerCurve : currentTrack.stats.hrCurve)) || {};
 
   // 3. Combine durations
   const allDurations = new Set<number>();
@@ -269,8 +303,8 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
   let timelineChart: uPlot | null = null;
 
   const curYVal = document.createElement('div');
-  curYVal.className = 'cur-y-val';
-  curYVal.style.cssText = `position:absolute;background:rgba(14, 14, 16, 0.9);color:#fff;padding:8px 12px;border-radius:4px;font-size:12px;font-family:system-ui;pointer-events:none;z-index:1000;box-shadow:0 4px 6px rgba(0,0,0,0.3);border:1px solid #2e2e34;display:none;`;
+  curYVal.className = 'cur-y-val font-m';
+  curYVal.style.cssText = `position:absolute;background:rgba(14, 14, 16, 0.9);color:#fff;padding:8px 12px;border-radius:4px;font-family:system-ui;pointer-events:none;z-index:1000;box-shadow:0 4px 6px rgba(0,0,0,0.3);border:1px solid #2e2e34;display:none;`;
   chartEl.style.position = 'relative';
   chartEl.appendChild(curYVal);
 
@@ -298,8 +332,7 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
           stroke: '#888888',
           width: 1,
           fill: 'transparent',
-          points: { show: true, size: 3, fill: '#888888' },
-          dash: [5, 5],
+          points: { show: true, size: 6, fill: '#888888' },
         },
       ],
       axes: [
@@ -381,6 +414,7 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
             const bb = u.bbox;
             
             let idx = u.cursor.idx;
+            let activeSeriesIdx = 1;
             const cursorLeft = u.cursor.left;
             const cursorTop = u.cursor.top;
             
@@ -392,19 +426,26 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
 
               for (let i = 0; i < xData.length; i++) {
                 const x = xData[i];
-                const y = yDataCurrent[i] || yDataMax[i];
-                if (x == null || y == null) continue;
-
-                const px = u.valToPos(x, 'x', false);
-                const py = u.valToPos(y, 'y', false);
-
-                const dx = px - cursorLeft;
-                const dy = py - cursorTop;
-                const d2 = dx * dx + dy * dy;
-
-                if (d2 < minD2) {
-                  minD2 = d2;
-                  nearestIdx = i;
+                const yCur = yDataCurrent[i];
+                const yMax = yDataMax[i];
+                
+                if (x != null) {
+                  const px = u.valToPos(x, 'x', false);
+                  
+                  if (yCur != null) {
+                    const py = u.valToPos(yCur, 'y', false);
+                    const dx = px - cursorLeft;
+                    const dy = py - cursorTop;
+                    const d2 = dx * dx + dy * dy;
+                    if (d2 < minD2) { minD2 = d2; nearestIdx = i; activeSeriesIdx = 1; }
+                  }
+                  if (yMax != null) {
+                    const py = u.valToPos(yMax, 'y', false);
+                    const dx = px - cursorLeft;
+                    const dy = py - cursorTop;
+                    const d2 = dx * dx + dy * dy;
+                    if (d2 < minD2) { minD2 = d2; nearestIdx = i; activeSeriesIdx = 2; }
+                  }
                 }
               }
 
@@ -417,14 +458,13 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
 
             if (idx != null && u.data[0][idx] != null) {
               const pcx = u.valToPos(u.data[0][idx]!, 'x', true);
-              const curVal = yDataCurrent[idx];
-              const pcy = u.valToPos(curVal !== null ? curVal : yDataMax[idx]!, 'y', true);
+              const pcy = u.valToPos(activeSeriesIdx === 1 ? yDataCurrent[idx]! : yDataMax[idx]!, 'y', true);
               
               // Draw lines
               ctx.save();
               ctx.beginPath();
               ctx.setLineDash([2 * dpr, 2 * dpr]);
-              ctx.strokeStyle = hexToRgba(color, 0.4);
+              ctx.strokeStyle = hexToRgba(activeSeriesIdx === 1 ? color : '#888888', 0.4);
               ctx.lineWidth = 1 * dpr;
               // Vertical line
               ctx.moveTo(pcx, bb.top);
@@ -440,15 +480,15 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
               ctx.beginPath();
               ctx.setLineDash([]); // Reset to solid
               ctx.arc(pcx, pcy, 12 * dpr, 0, 2 * Math.PI);
-              ctx.fillStyle = hexToRgba(color, 0.2);
+              ctx.fillStyle = hexToRgba(activeSeriesIdx === 1 ? color : '#888888', 0.2);
               ctx.fill();
               ctx.restore();
 
               // Draw center circle
               ctx.save();
               ctx.beginPath();
-              const dotRadius = curVal !== null ? 5 * dpr : 3 * dpr;
-              const dotColor = curVal !== null ? color : '#888888';
+              const dotRadius = activeSeriesIdx === 1 ? 5 * dpr : 6 * dpr;
+              const dotColor = activeSeriesIdx === 1 ? color : '#888888';
               ctx.arc(pcx, pcy, dotRadius, 0, 2 * Math.PI);
               ctx.fillStyle = dotColor;
               ctx.fill();
@@ -518,6 +558,7 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
             u.redraw(false);
             
             let idx = u.cursor.idx;
+            let activeSeriesIdx = 1;
             const cursorLeft = u.cursor.left;
             const cursorTop = u.cursor.top;
             
@@ -529,19 +570,26 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
 
               for (let i = 0; i < xData.length; i++) {
                 const x = xData[i];
-                const y = yDataCurrent[i] || yDataMax[i];
-                if (x == null || y == null) continue;
-
-                const px = u.valToPos(x, 'x', false);
-                const py = u.valToPos(y, 'y', false);
-
-                const dx = px - cursorLeft;
-                const dy = py - cursorTop;
-                const d2 = dx * dx + dy * dy;
-
-                if (d2 < minD2) {
-                  minD2 = d2;
-                  nearestIdx = i;
+                const yCur = yDataCurrent[i];
+                const yMax = yDataMax[i];
+                
+                if (x != null) {
+                  const px = u.valToPos(x, 'x', false);
+                  
+                  if (yCur != null) {
+                    const py = u.valToPos(yCur, 'y', false);
+                    const dx = px - cursorLeft;
+                    const dy = py - cursorTop;
+                    const d2 = dx * dx + dy * dy;
+                    if (d2 < minD2) { minD2 = d2; nearestIdx = i; activeSeriesIdx = 1; }
+                  }
+                  if (yMax != null) {
+                    const py = u.valToPos(yMax, 'y', false);
+                    const dx = px - cursorLeft;
+                    const dy = py - cursorTop;
+                    const d2 = dx * dx + dy * dy;
+                    if (d2 < minD2) { minD2 = d2; nearestIdx = i; activeSeriesIdx = 2; }
+                  }
                 }
               }
 
@@ -566,20 +614,20 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
               const curVal = yDataCurrent[idx!];
               const mxVal = yDataMax[idx!];
               
-              let html = `<div style="font-weight: bold; margin-bottom: 4px;">${fmtDuration(durVal)}</div>`;
+              let html = `<div class="evolution-tooltip-title">${fmtDuration(durVal)}</div>`;
               if (curVal !== null) {
                 html += `
-                  <div style="display: flex; justify-content: space-between; gap: 15px;">
-                    <span style="color: #8a8a93;">Current:</span>
-                    <span style="font-weight: bold;">${curVal} ${unit}</span>
+                  <div class="evolution-tooltip-row">
+                    <span class="evolution-tooltip-label">Current:</span>
+                    <span class="evolution-tooltip-value">${curVal} ${unit}</span>
                   </div>
                 `;
               }
               if (mxVal !== null) {
                 html += `
-                  <div style="display: flex; justify-content: space-between; gap: 15px;">
-                    <span style="color: #8a8a93;">Max:</span>
-                    <span style="font-weight: bold;">${mxVal} ${unit}</span>
+                  <div class="evolution-tooltip-row">
+                    <span class="evolution-tooltip-label">Max:</span>
+                    <span class="evolution-tooltip-value">${mxVal} ${unit}</span>
                   </div>
                 `;
               }
@@ -599,7 +647,9 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
                 }
               }
               curYVal.style.display = '';
-              curYVal.style.transform = `translate(${cx}px, ${cy}px) translate(15px, 15px)`;
+              curYVal.style.left = `${cursorLeft! + bb.left}px`;
+              curYVal.style.top = `${cursorTop! + bb.top}px`;
+              curYVal.style.transform = `translate(5px, -50%)`;
 
 
             } else {
@@ -656,15 +706,21 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
 
     // 4. Add expandable table
     const detailsEl = document.createElement('details');
+    detailsEl.classList.add('progress-details');
     detailsEl.style.marginTop = '0px';
+    detailsEl.style.setProperty('--chart-color', color);
     detailsEl.innerHTML = `
-      <summary style="cursor:pointer; font-size:12px; color:var(--text-dim)">Show Data Table</summary>
-      <table class="power-curve-table" style="margin-top:0px; width:100%; border-collapse:collapse; font-size:12px;">
+      <summary>
+        <span class="material-symbols-rounded expand-icon">chevron_right</span>
+        <span class="material-symbols-rounded">table_chart</span>
+        Data Table
+      </summary>
+      <table class="power-curve-table">
         <thead>
-          <tr style="text-align:left; color:var(--text-dim)">
-            <th style="padding:4px 8px">Duration</th>
-            <th style="padding:4px 8px">Current</th>
-            <th style="padding:4px 8px">All-Time Max</th>
+          <tr>
+            <th>Duration</th>
+            <th>Current</th>
+            <th>All-Time Max</th>
           </tr>
         </thead>
         <tbody>
@@ -674,12 +730,12 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
             const mxId = maxCurve[d]?.trackId;
             const mxIdx = maxCurve[d]?.idx;
             return `
-              <tr style="border-top:1px solid #2e2e34">
-                <td style="padding:4px 8px">${fmtDuration(d)}</td>
-                <td style="padding:4px 8px">${cur} ${unit}</td>
-                <td style="padding:4px 8px">
+              <tr>
+                <td>${fmtDuration(d)}</td>
+                <td>${cur} ${unit}</td>
+                <td>
                   ${mx} ${unit}
-                  ${mxId ? `<button class="evolution-select-btn" data-id="${mxId}" data-idx="${mxIdx}" data-dur="${d}" style="background:none; border:none; cursor:pointer; color:var(--chart-color); padding:0; font-size:14px; vertical-align:middle; margin-left:4px;" title="Select track and range">🎯</button>` : ''}
+                  ${mxId ? `<button class="evolution-select-btn" data-id="${mxId}" data-idx="${mxIdx}" data-dur="${d}" title="Select track and range"><span class="material-symbols-rounded">gps_fixed</span></button>` : ''}
                 </td>
               </tr>
             `;
@@ -687,11 +743,12 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
         </tbody>
       </table>
     `;
-    grid.appendChild(detailsEl);
+    cardContainer.appendChild(detailsEl);
 
     detailsEl.querySelectorAll('.evolution-select-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.preventDefault();
+        e.stopPropagation();
         const id = btn.getAttribute('data-id');
         const idx = btn.getAttribute('data-idx');
         const dur = btn.getAttribute('data-dur');
@@ -714,8 +771,8 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
     if (timelineEl) {
       timelineEl.style.position = 'relative';
       const timelineTooltip = document.createElement('div');
-      timelineTooltip.className = 'timeline-tooltip';
-      timelineTooltip.style.cssText = `position:absolute;background:rgba(14, 14, 16, 0.9);color:#fff;padding:8px 12px;border-radius:4px;font-size:12px;font-family:system-ui;pointer-events:none;z-index:1000;box-shadow:0 4px 6px rgba(0,0,0,0.3);border:1px solid #2e2e34;display:none;`;
+      timelineTooltip.className = 'timeline-tooltip font-m';
+      timelineTooltip.style.cssText = `position:absolute;background:rgba(14, 14, 16, 0.9);color:#fff;padding:8px 12px;border-radius:4px;font-family:system-ui;pointer-events:none;z-index:1000;box-shadow:0 4px 6px rgba(0,0,0,0.3);border:1px solid #2e2e34;display:none;`;
       timelineEl.appendChild(timelineTooltip);
 
       if (xTimeline.length > 0) {
@@ -930,6 +987,7 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
                 let idx = u.cursor.idx;
                 const cursorLeft = u.cursor.left;
                 const cursorTop = u.cursor.top;
+                const bb = u.bbox;
                 
                 if (cursorLeft != null && cursorTop != null && cursorLeft >= 0 && cursorTop >= 0) {
                   let minD2 = Infinity;
@@ -979,19 +1037,19 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
                   const valStr = val != null ? `${val} ${unit}` : '—';
                   
                   timelineTooltip.innerHTML = `
-                    <div style="display: flex; justify-content: space-between; gap: 15px;">
-                      <span style="color: #8a8a93;">Date:</span>
-                      <span style="font-weight: bold;">${dateStr}</span>
+                    <div class="evolution-tooltip-row">
+                      <span class="evolution-tooltip-label">Date:</span>
+                      <span class="evolution-tooltip-value">${dateStr}</span>
                     </div>
-                    <div style="display: flex; justify-content: space-between; gap: 15px;">
-                      <span style="color: #8a8a93;">Value:</span>
-                      <span style="font-weight: bold;">${valStr}</span>
+                    <div class="evolution-tooltip-row">
+                      <span class="evolution-tooltip-label">Value:</span>
+                      <span class="evolution-tooltip-value">${valStr}</span>
                     </div>
                   `;
                   timelineTooltip.style.display = 'block';
-                  const tooltipWidth = timelineTooltip.offsetWidth;
-                  const translateX = -tooltipWidth - 6;
-                  timelineTooltip.style.transform = `translate(${cx}px, ${cy}px) translate(${translateX}px, -50%)`;
+                  timelineTooltip.style.left = `${cursorLeft! + bb.left}px`;
+                  timelineTooltip.style.top = `${cursorTop! + bb.top}px`;
+                  timelineTooltip.style.transform = `translate(5px, -50%)`;
                   
 
                 } else {
@@ -1030,19 +1088,9 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
           timelineChart!.redraw();
         });
 
-        const rangeCtrl = row2.querySelector(`#${metricKey}-time-range`);
-        if (rangeCtrl) {
-          rangeCtrl.querySelectorAll('.seg-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-              const range = btn.getAttribute('data-range');
-              if (range) {
-                onRangeChange(range);
-              }
-            });
-          });
-        }
+        // Range control moved to toolbar
       } else {
-        timelineEl.innerHTML = `<div style="color:var(--text-dim); font-size:12px; text-align:center; margin-top:20px;">No data for the past year</div>`;
+        timelineEl.innerHTML = `<div class="evolution-empty-text">No data for the past year</div>`;
       }
     }
   });
@@ -1067,22 +1115,384 @@ function renderCurveEvolutionCard(opts: CurveEvolutionCardOptions) {
     },
     updateRange: (range: string) => {
       currentRange = range;
-      const rangeCtrl = row2.querySelector(`#${metricKey}-time-range`);
-      if (rangeCtrl) {
-        rangeCtrl.querySelectorAll('.seg-btn').forEach(b => {
-          if (b.getAttribute('data-range') === range) {
-            b.classList.add('active');
-          } else {
-            b.classList.remove('active');
-          }
-        });
-      }
       if (timelineChart) {
         const { xFiltered, rawYFiltered, smoothedYFiltered } = getFilteredData(currentDur, currentRange);
         timelineChart.setData([xFiltered, rawYFiltered, smoothedYFiltered]);
       }
     }
   };
+}
+
+function getWeekStart(date: Date): Date {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1); // adjust when day is sunday
+  d.setDate(diff);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function computeWeeklyDistance(allTracks: TrackData[]): { week: string, timestamp: number, distance: number }[] {
+  const weeklyData: Record<string, { timestamp: number, distance: number }> = {};
+  
+  allTracks.forEach(t => {
+    if (!t.stats.startTime || !t.stats.totalDist) return;
+    
+    const date = new Date(t.stats.startTime);
+    const weekStart = getWeekStart(date);
+    const weekKey = weekStart.toISOString().split('T')[0];
+    
+    if (!weeklyData[weekKey]) {
+      weeklyData[weekKey] = { timestamp: weekStart.getTime(), distance: 0 };
+    }
+    weeklyData[weekKey].distance += t.stats.totalDist;
+  });
+  
+  return Object.entries(weeklyData)
+    .map(([week, data]) => ({ week, timestamp: data.timestamp, distance: data.distance }))
+    .sort((a, b) => a.timestamp - b.timestamp);
+}
+
+function computeAccumulatedDistances(allTracks: TrackData[]): { currentYear: number, pastYear: number, past6m: number, past1m: number } {
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  
+  const oneYearAgo = new Date(now);
+  oneYearAgo.setFullYear(now.getFullYear() - 1);
+  
+  const sixMonthsAgo = new Date(now);
+  sixMonthsAgo.setMonth(now.getMonth() - 6);
+  
+  const oneMonthAgo = new Date(now);
+  oneMonthAgo.setMonth(now.getMonth() - 1);
+  
+  let currentYearDist = 0;
+  let pastYearDist = 0;
+  let past6mDist = 0;
+  let past1mDist = 0;
+  
+  allTracks.forEach(t => {
+    if (!t.stats.startTime || !t.stats.totalDist) return;
+    
+    const time = t.stats.startTime;
+    const date = new Date(time);
+    
+    if (date.getFullYear() === currentYear) {
+      currentYearDist += t.stats.totalDist;
+    }
+    if (time >= oneYearAgo.getTime()) {
+      pastYearDist += t.stats.totalDist;
+    }
+    if (time >= sixMonthsAgo.getTime()) {
+      past6mDist += t.stats.totalDist;
+    }
+    if (time >= oneMonthAgo.getTime()) {
+      past1mDist += t.stats.totalDist;
+    }
+  });
+  
+  return { currentYear: currentYearDist, pastYear: pastYearDist, past6m: past6mDist, past1m: past1mDist };
+}
+
+function computeWeeklyElevation(allTracks: TrackData[]): { week: string, timestamp: number, elevation: number }[] {
+  const weeklyData: Record<string, { timestamp: number, elevation: number }> = {};
+  
+  allTracks.forEach(t => {
+    if (!t.stats.startTime || t.stats.elevGain === undefined) return;
+    
+    const date = new Date(t.stats.startTime);
+    const weekStart = getWeekStart(date);
+    const weekKey = weekStart.toISOString().split('T')[0];
+    
+    if (!weeklyData[weekKey]) {
+      weeklyData[weekKey] = { timestamp: weekStart.getTime(), elevation: 0 };
+    }
+    weeklyData[weekKey].elevation += t.stats.elevGain;
+  });
+  
+  return Object.entries(weeklyData)
+    .map(([week, data]) => ({ week, timestamp: data.timestamp, elevation: data.elevation }))
+    .sort((a, b) => a.timestamp - b.timestamp);
+}
+
+function computeAccumulatedElevations(allTracks: TrackData[]): { currentYear: number, pastYear: number, past6m: number, past1m: number } {
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  
+  const oneYearAgo = new Date(now);
+  oneYearAgo.setFullYear(now.getFullYear() - 1);
+  
+  const sixMonthsAgo = new Date(now);
+  sixMonthsAgo.setMonth(now.getMonth() - 6);
+  
+  const oneMonthAgo = new Date(now);
+  oneMonthAgo.setMonth(now.getMonth() - 1);
+  
+  let currentYearElev = 0;
+  let pastYearElev = 0;
+  let past6mElev = 0;
+  let past1mElev = 0;
+  
+  allTracks.forEach(t => {
+    if (!t.stats.startTime || t.stats.elevGain === undefined) return;
+    
+    const time = t.stats.startTime;
+    const date = new Date(time);
+    
+    if (date.getFullYear() === currentYear) {
+      currentYearElev += t.stats.elevGain;
+    }
+    if (time >= oneYearAgo.getTime()) {
+      pastYearElev += t.stats.elevGain;
+    }
+    if (time >= sixMonthsAgo.getTime()) {
+      past6mElev += t.stats.elevGain;
+    }
+    if (time >= oneMonthAgo.getTime()) {
+      past1mElev += t.stats.elevGain;
+    }
+  });
+  
+  return { currentYear: currentYearElev, pastYear: pastYearElev, past6m: past6mElev, past1m: past1mElev };
+}
+
+function renderDistanceProgress(grid: HTMLElement, allTracks: TrackData[]) {
+  const weeklyDistance = computeWeeklyDistance(allTracks);
+  const accumulatedDistance = computeAccumulatedDistances(allTracks);
+  const weeklyElevation = computeWeeklyElevation(allTracks);
+  const accumulatedElevation = computeAccumulatedElevations(allTracks);
+  
+  const cardContainer = document.createElement('div');
+  cardContainer.className = 'chart-row distance-progress-card';
+  cardContainer.id = 'distance-evolution-card';
+  
+  cardContainer.innerHTML = `
+    <div class="chart-row-header">
+      <div class="chart-row-label-group">
+        <span class="material-symbols-rounded chart-row-icon" id="progress-icon" style="--chart-color:${Metrics.distance.color}">${Metrics.distance.icon}</span>
+        <span class="chart-row-label" id="progress-label">Distance Progress</span>
+      </div>
+      <div class="segmented-control" style="margin-left: auto;">
+        <button class="seg-btn active" data-type="distance">Distance</button>
+        <button class="seg-btn" data-type="elevation">Elevation</button>
+      </div>
+    </div>
+    <div class="card-content" style="display: flex;">
+      <div id="distance-y-axis-chart" style="width: 50px;"></div>
+      <div class="chart-scroll-container" style="flex: 1; overflow-x: auto; position: relative;">
+        <div id="distance-weekly-chart"></div>
+      </div>
+      <div class="accumulated-table-container" style="width: 250px; margin-left: 20px;">
+        <table class="accumulated-table">
+          <thead>
+            <tr><th>Period</th><th id="table-metric-header">Distance</th></tr>
+          </thead>
+          <tbody id="accumulated-table-body">
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+  
+  grid.appendChild(cardContainer);
+  
+  const chartEl = cardContainer.querySelector('#distance-weekly-chart') as HTMLElement;
+  const yAxisEl = cardContainer.querySelector('#distance-y-axis-chart') as HTMLElement;
+  const iconEl = cardContainer.querySelector('#progress-icon') as HTMLElement;
+  const labelEl = cardContainer.querySelector('#progress-label') as HTMLElement;
+  const tableHeaderEl = cardContainer.querySelector('#table-metric-header') as HTMLElement;
+  const tableBodyEl = cardContainer.querySelector('#accumulated-table-body') as HTMLElement;
+  
+  if (!chartEl || !yAxisEl) return;
+  
+  chartEl.style.position = 'relative';
+  const tooltip = document.createElement('div');
+  tooltip.className = 'timeline-tooltip font-m';
+  tooltip.style.cssText = `position:absolute;background:rgba(14, 14, 16, 0.9);color:#fff;padding:8px 12px;border-radius:4px;font-family:system-ui;pointer-events:none;z-index:1000;box-shadow:0 4px 6px rgba(0,0,0,0.3);border:1px solid #2e2e34;display:none;`;
+  chartEl.appendChild(tooltip);
+  
+  let currentChart: uPlot | null = null;
+  let currentYAxisChart: uPlot | null = null;
+  
+  function updateUI(type: 'distance' | 'elevation') {
+    const isDistance = type === 'distance';
+    const weeklyData = isDistance ? weeklyDistance : weeklyElevation;
+    const accumulated = isDistance ? accumulatedDistance : accumulatedElevation;
+    const color = isDistance ? Metrics.distance.color : Metrics.elevation.color;
+    const unit = isDistance ? 'km' : 'm';
+    const icon = isDistance ? Metrics.distance.icon : Metrics.elevation.icon;
+    
+    // Update header
+    iconEl.textContent = icon;
+    iconEl.style.setProperty('--chart-color', color);
+    labelEl.textContent = isDistance ? 'Distance Progress' : 'Elevation Progress';
+    
+    // Update table
+    tableHeaderEl.textContent = isDistance ? 'Distance' : 'Elevation';
+    tableBodyEl.innerHTML = `
+      <tr><td>Current Year</td><td>${isDistance ? (accumulated.currentYear / 1000).toFixed(1) : accumulated.currentYear.toFixed(0)} ${unit}</td></tr>
+      <tr><td>Past Year</td><td>${isDistance ? (accumulated.pastYear / 1000).toFixed(1) : accumulated.pastYear.toFixed(0)} ${unit}</td></tr>
+      <tr><td>Past 6 Months</td><td>${isDistance ? (accumulated.past6m / 1000).toFixed(1) : accumulated.past6m.toFixed(0)} ${unit}</td></tr>
+      <tr><td>Past 1 Month</td><td>${isDistance ? (accumulated.past1m / 1000).toFixed(1) : accumulated.past1m.toFixed(0)} ${unit}</td></tr>
+    `;
+    
+    const xData = weeklyData.map(d => d.timestamp / 1000);
+    const yData = isDistance 
+      ? (weeklyData as any[]).map(d => d.distance / 1000)
+      : (weeklyData as any[]).map(d => d.elevation);
+    
+    if (xData.length === 0) return;
+    
+    const width = Math.max(chartEl.clientWidth, xData.length * 40);
+    const maxVal = Math.max(...yData) * 1.1;
+    
+    const yAxisOpts: uPlot.Options = {
+      width: 50,
+      height: 150,
+      scales: {
+        x: { time: true },
+        y: { range: [0, maxVal] }
+      },
+      series: [
+        {},
+        { show: false }
+      ],
+      axes: [
+        { show: false },
+        {
+          stroke: '#555564',
+          grid: { stroke: '#2e2e34', width: 1 },
+          show: true,
+          values: (self, splits) => splits.map(s => `${s.toFixed(0)} ${unit}`),
+          font: '10px system-ui, sans-serif',
+          size: 40,
+        }
+      ]
+    };
+    
+    const mainOpts: uPlot.Options = {
+      width: width,
+      height: 150,
+      scales: {
+        x: { time: true },
+        y: { range: [0, maxVal] }
+      },
+      series: [
+        {},
+        {
+          label: isDistance ? 'Distance' : 'Elevation',
+          stroke: color,
+          fill: hexToRgba(color, 0.1),
+          width: 2,
+          points: { show: true, size: 4 }
+        }
+      ],
+      cursor: {
+        drag: { x: false, y: false },
+        points: { show: false },
+        x: false,
+        y: false,
+      },
+      hooks: {
+        setCursor: [
+          (u: uPlot) => {
+            const idx = u.cursor.idx;
+            const cursorLeft = u.cursor.left;
+            const cursorTop = u.cursor.top;
+            const bb = u.bbox;
+            
+            if (idx != null && cursorLeft != null && cursorTop != null && cursorLeft >= 0 && cursorTop >= 0) {
+              const d = new Date(u.data[0][idx]! * 1000);
+              const dateStr = `Week of ${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+              const val = u.data[1][idx];
+              const valStr = val != null ? (isDistance ? `${val.toFixed(1)} km` : `${val.toFixed(0)} m`) : '—';
+              
+              tooltip.innerHTML = `
+                <div class="evolution-tooltip-row">
+                  <span class="evolution-tooltip-label">Date:</span>
+                  <span class="evolution-tooltip-value">${dateStr}</span>
+                </div>
+                <div class="evolution-tooltip-row">
+                  <span class="evolution-tooltip-label">${isDistance ? 'Distance:' : 'Elevation:'}</span>
+                  <span class="evolution-tooltip-value">${valStr}</span>
+                </div>
+              `;
+              tooltip.style.display = 'block';
+              tooltip.style.left = `${cursorLeft! + bb.left}px`;
+              tooltip.style.top = `${cursorTop! + bb.top}px`;
+              tooltip.style.transform = `translate(5px, -50%)`;
+            } else {
+              tooltip.style.display = 'none';
+            }
+          }
+        ],
+        draw: [
+          (u: uPlot) => {
+            const idx = u.cursor.idx;
+            if (idx != null && u.data[0][idx] != null) {
+              const tpcx = u.valToPos(u.data[0][idx]!, 'x', true);
+              const tdpr = window.devicePixelRatio || 1;
+              const tctx = u.ctx;
+              
+              tctx.save();
+              tctx.beginPath();
+              tctx.strokeStyle = hexToRgba(color, 0.2);
+              tctx.lineWidth = 10 * tdpr;
+              tctx.moveTo(tpcx, u.bbox.top);
+              tctx.lineTo(tpcx, u.bbox.top + u.bbox.height);
+              tctx.stroke();
+              tctx.restore();
+            }
+          }
+        ]
+      },
+      axes: [
+        {
+          stroke: '#555564',
+          grid: { stroke: '#2e2e34', width: 1 },
+          show: true,
+          space: 40,
+          values: (self, splits) => splits.map(s => {
+            const d = new Date(s * 1000);
+            return `${d.getMonth() + 1}/${d.getDate()}`;
+          }),
+          font: '10px system-ui, sans-serif',
+          size: 30,
+        },
+        {
+          stroke: '#555564',
+          grid: { stroke: '#2e2e34', width: 1 },
+          show: true,
+          values: () => [],
+          ticks: { show: false },
+          size: 0,
+        }
+      ]
+    };
+    
+    currentChart?.destroy();
+    currentYAxisChart?.destroy();
+    
+    currentYAxisChart = new uPlot(yAxisOpts, [xData, yData], yAxisEl);
+    currentChart = new uPlot(mainOpts, [xData, yData], chartEl);
+    
+    const scrollContainer = cardContainer.querySelector('.chart-scroll-container') as HTMLElement;
+    if (scrollContainer) {
+      scrollContainer.scrollLeft = scrollContainer.scrollWidth - scrollContainer.clientWidth;
+    }
+  }
+  
+  updateUI('distance');
+  
+  const buttons = cardContainer.querySelectorAll('.segmented-control .seg-btn');
+  buttons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      buttons.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const type = btn.getAttribute('data-type') as 'distance' | 'elevation';
+      updateUI(type);
+    });
+  });
 }
 
 

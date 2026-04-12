@@ -26,6 +26,52 @@ export const MapView = (() => {
 
   const GAP_THRESHOLD: number = 60000; // 1 minute in ms
 
+  class GridIndex {
+    private grid: Map<string, Set<string>> = new Map();
+    private cellSize: number = 0.05; // degrees, ~5km
+
+    addTrack(id: string, bounds: { minLat: number; maxLat: number; minLon: number; maxLon: number } | undefined) {
+      if (!bounds) return;
+      const minX = Math.floor(bounds.minLat / this.cellSize);
+      const maxX = Math.floor(bounds.maxLat / this.cellSize);
+      const minY = Math.floor(bounds.minLon / this.cellSize);
+      const maxY = Math.floor(bounds.maxLon / this.cellSize);
+
+      for (let x = minX; x <= maxX; x++) {
+        for (let y = minY; y <= maxY; y++) {
+          const key = `${x},${y}`;
+          if (!this.grid.has(key)) {
+            this.grid.set(key, new Set());
+          }
+          this.grid.get(key)!.add(id);
+        }
+      }
+    }
+
+    query(bounds: { minLat: number; maxLat: number; minLon: number; maxLon: number }): Set<string> {
+      const result = new Set<string>();
+      const minX = Math.floor(bounds.minLat / this.cellSize);
+      const maxX = Math.floor(bounds.maxLat / this.cellSize);
+      const minY = Math.floor(bounds.minLon / this.cellSize);
+      const maxY = Math.floor(bounds.maxLon / this.cellSize);
+
+      for (let x = minX; x <= maxX; x++) {
+        for (let y = minY; y <= maxY; y++) {
+          const key = `${x},${y}`;
+          const cell = this.grid.get(key);
+          if (cell) {
+            for (const id of cell) {
+              result.add(id);
+            }
+          }
+        }
+      }
+      return result;
+    }
+  }
+
+  const spatialIndex = new GridIndex();
+
   interface ImagerySource {
     id: string;
     name: string;
@@ -282,6 +328,7 @@ export const MapView = (() => {
       zoom: 8,
       layers: [LAYERS.swisstopo],
       zoomControl: false,
+      renderer: L.canvas(),
     });
 
     L.control.zoom({ position: 'bottomright' }).addTo(map);
@@ -332,6 +379,7 @@ export const MapView = (() => {
       const c = map.getCenter();
       onMoveCb(c.lat, c.lng, map.getZoom());
       if (menuEl && !menuEl.classList.contains('hidden')) updateExtraLayersMenu();
+      updateVisibility();
     });
 
     map.on('dblclick', () => {
@@ -359,15 +407,13 @@ export const MapView = (() => {
       // If clicking on/near the ALREADY selected track, move the pinned point
       if (nearest.id === selectedId && nearest.dist < 32) {
         onPointClickCb(nearest.id, nearest.pointIdx);
-        return;
       }
+    });
 
-      if (tracksFound.length === 1 && nearest.dist < 32) {
-        // If very close to exactly one track, just select it
-        onSelectCb(nearest.id);
-        return;
-      }
-
+    map.on('contextmenu', (e: L.LeafletMouseEvent) => {
+      // Increase search radius to 100 pixels for right click
+      const tracksFound = findNearestTracks(e.latlng, 100);
+      if (tracksFound.length === 0) return;
       showTrackPickerPopup(e.latlng, tracksFound);
     });
 
@@ -397,10 +443,14 @@ export const MapView = (() => {
     }
   }
 
-  function addTrack(track: TrackData, pane: string = 'overlayPane') {
-    trackData[track.id] = track;
-    const pts = track.points;
+  function _createPolylines(track: TrackData, pane: string = 'overlayPane'): L.FeatureGroup {
+    const pts = track.simplifiedPoints || track.points;
     const layers: L.Polyline[] = [];
+    
+    const isSelected = track.id === selectedId;
+    const weight = isSelected ? 3 : 1.5;
+    const opacity = isSelected ? 0.2 : 0.6;
+    const gapOpacity = isSelected ? 1 : 0.8;
 
     let currentSegment: [number, number][] = [];
     for (let i = 0; i < pts.length; i++) {
@@ -413,7 +463,7 @@ export const MapView = (() => {
           // Finish current segment
           if (currentSegment.length > 1) {
             layers.push(
-              L.polyline(currentSegment, { color: track.color, weight: 3, opacity: 0.2, pane }),
+              L.polyline(currentSegment, { color: track.color, weight, opacity, pane }),
             );
           }
           // Draw solid line for gap
@@ -425,8 +475,8 @@ export const MapView = (() => {
               ],
               {
                 color: '#888896',
-                weight: 3,
-                opacity: 1,
+                weight,
+                opacity: gapOpacity,
                 pane
               },
             ),
@@ -437,14 +487,55 @@ export const MapView = (() => {
       currentSegment.push([p.lat, p.lon]);
     }
     if (currentSegment.length > 1) {
-      layers.push(L.polyline(currentSegment, { color: track.color, weight: 3, opacity: 0.2, pane }));
+      layers.push(L.polyline(currentSegment, { color: track.color, weight, opacity, pane }));
     }
 
-    const group = L.featureGroup(layers).addTo(map);
-    group.on('click', (e: L.LeafletMouseEvent) => {
-      // Don't stopPropagation so map click listener also fires
+    return L.featureGroup(layers);
+  }
+
+  function addTrack(track: TrackData) {
+    trackData[track.id] = track;
+    spatialIndex.addTrack(track.id, track.bounds);
+    updateVisibility();
+  }
+
+  function addTracks(tracks: TrackData[]) {
+    for (const t of tracks) {
+      trackData[t.id] = t;
+      spatialIndex.addTrack(t.id, t.bounds);
+    }
+    updateVisibility();
+  }
+
+  function updateVisibility() {
+    if (!map) return;
+    const bounds = map.getBounds();
+    const visibleIds = spatialIndex.query({
+      minLat: bounds.getSouth(),
+      maxLat: bounds.getNorth(),
+      minLon: bounds.getWest(),
+      maxLon: bounds.getEast()
     });
-    polylines[track.id] = group;
+
+    // Remove tracks that are no longer visible
+    for (const id in polylines) {
+      if (!visibleIds.has(id) && id !== selectedId) {
+        map.removeLayer(polylines[id]);
+      }
+    }
+
+    // Add tracks that are now visible
+    for (const id of visibleIds) {
+      const track = trackData[id];
+      if (track && track.visible !== false) {
+        if (!polylines[id]) {
+          polylines[id] = _createPolylines(track);
+        }
+        if (!map.hasLayer(polylines[id])) {
+          map.addLayer(polylines[id]);
+        }
+      }
+    }
   }
 
   function findNearestTracks(latlng: L.LatLng, maxPixelDist = 32): { id: string, name: string, color: string, dist: number, geoDist: number, pointIdx: number }[] {
@@ -452,7 +543,7 @@ export const MapView = (() => {
     const clickPoint = map.latLngToContainerPoint(latlng);
 
     for (const id in trackData) {
-      if (!map.hasLayer(polylines[id])) continue;
+      if (!polylines[id] || !map.hasLayer(polylines[id])) continue;
       const t = trackData[id];
       let minDistPx = Infinity;
       let minGeoDist = Infinity;
@@ -551,8 +642,34 @@ export const MapView = (() => {
     if (selectedId === id) _syncOutline();
   }
 
+  function _updateTrackStyle(id: string, isSelected: boolean) {
+    const pl = polylines[id];
+    if (!pl) return;
+    const weight = isSelected ? 3 : 1.5;
+    const opacity = isSelected ? 0.2 : 0.6;
+    
+    pl.eachLayer((layer: any) => {
+      if (layer.setStyle) {
+        if (layer.options.color === '#888896') {
+          layer.setStyle({ weight, opacity: isSelected ? 1 : 0.8 });
+        } else {
+          layer.setStyle({ weight, opacity });
+        }
+      }
+    });
+  }
+
   function setSelectedTrack(id: string | null, _fit = true) {
+    const prevId = selectedId;
     selectedId = id;
+    
+    if (prevId && polylines[prevId]) {
+      _updateTrackStyle(prevId, false);
+    }
+    if (selectedId && polylines[selectedId]) {
+      _updateTrackStyle(selectedId, true);
+    }
+    
     _syncOutline();
   }
 
@@ -683,13 +800,13 @@ export const MapView = (() => {
     // Start/End markers (Monochrome)
     const startIcon = L.divIcon({
       className: 'sel-marker-start',
-      html: `<span class="material-symbols-rounded" style="color:#fff; font-size:20px; font-variation-settings:'FILL' 1; filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 2px #000)">play_circle</span>`,
+      html: `<span class="material-symbols-rounded font-l" style="color:#fff; font-variation-settings:'FILL' 1; filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 2px #000)">play_circle</span>`,
       iconSize: [20, 20],
       iconAnchor: [10, 10],
     });
     const endIcon = L.divIcon({
       className: 'sel-marker-end',
-      html: `<span class="material-symbols-rounded" style="color:#fff; font-size:20px; font-variation-settings:'FILL' 1; filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 2px #000)">stop_circle</span>`,
+      html: `<span class="material-symbols-rounded font-l" style="color:#fff; font-variation-settings:'FILL' 1; filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 2px #000)">stop_circle</span>`,
       iconSize: [20, 20],
       iconAnchor: [10, 10],
     });
@@ -819,6 +936,7 @@ export const MapView = (() => {
     init,
     switchBasemap,
     addTrack,
+    addTracks,
     removeTrack,
     setTrackVisible,
     setSelectedTrack,

@@ -73,11 +73,11 @@ export function renderCombined(track: TrackData | null) {
   container.style.overflow = 'hidden';
 
   // Render UI with selectors and plot container
-  container.innerHTML = `
+    container.innerHTML = `
     <div class="combined-controls" style="display: flex; align-items: center; padding: 6px 12px; gap: 12px; border-bottom: 1px solid var(--border); background: var(--bg); min-height: 40px; box-sizing: border-box;">
       <div class="selector-group" style="display: flex; align-items: center; gap: 6px;">
-        <span class="material-symbols-rounded" style="font-size: 18px; color: var(--text-muted);">arrow_forward</span>
-        <span style="font-size: 12px; font-weight: 600; color: var(--text-muted);">X Axis:</span>
+        <span class="material-symbols-rounded font-l" style="color: var(--text-muted);">arrow_forward</span>
+        <span class="font-m" style="font-weight: 600; color: var(--text-muted);">X Axis:</span>
         <button id="btn-combined-x" class="sort-select-btn" style="min-width: 150px;">
           <span class="material-symbols-rounded" style="color: ${xDef.color}">${xDef.icon}</span>
           <span class="item-label">${xDef.label}</span>
@@ -85,8 +85,8 @@ export function renderCombined(track: TrackData | null) {
         </button>
       </div>
       <div class="selector-group" style="display: flex; align-items: center; gap: 6px;">
-        <span class="material-symbols-rounded" style="font-size: 18px; color: var(--text-muted);">arrow_upward</span>
-        <span style="font-size: 12px; font-weight: 600; color: var(--text-muted);">Y Axis:</span>
+        <span class="material-symbols-rounded font-l" style="color: var(--text-muted);">arrow_upward</span>
+        <span class="font-m" style="font-weight: 600; color: var(--text-muted);">Y Axis:</span>
         <button id="btn-combined-y" class="sort-select-btn" style="min-width: 150px;">
           <span class="material-symbols-rounded" style="color: ${yDef.color}">${yDef.icon}</span>
           <span class="item-label">${yDef.label}</span>
@@ -94,20 +94,20 @@ export function renderCombined(track: TrackData | null) {
         </button>
       </div>
       <div class="slider-group" style="display: flex; align-items: center; gap: 6px; flex: 1;">
-        <span class="material-symbols-rounded" style="font-size: 18px; color: var(--text-muted);">schedule</span>
-        <span style="font-size: 12px; font-weight: 600; color: var(--text-muted);">Time:</span>
+        <span class="material-symbols-rounded font-l" style="color: var(--text-muted);">schedule</span>
+        <span class="font-m" style="font-weight: 600; color: var(--text-muted);">Time:</span>
         <input type="range" id="combined-time-slider" min="0" max="100" value="0" style="flex: 1;">
-        <span id="combined-time-val" style="font-size: 11px; color: var(--text); background: var(--surface3); padding: 3px 8px; border-radius: 12px; border: 1px solid var(--border); min-width: 65px; text-align: center; flex-shrink: 0;">0:00</span>
+        <span id="combined-time-val" class="font-s" style="color: var(--text); background: var(--surface3); padding: 3px 8px; border-radius: 12px; border: 1px solid var(--border); min-width: 65px; text-align: center; flex-shrink: 0;">0:00</span>
         <button id="btn-combined-play" class="sort-select-btn" style="padding: 4px; flex: 0 0 28px; height: 28px; width: 28px; justify-content: center;">
           <span class="material-symbols-rounded">play_arrow</span>
         </button>
       </div>
       <div class="toggle-group" style="display: flex; align-items: center; background: var(--surface3); border-radius: 4px; padding: 2px; border: 1px solid var(--border); flex-shrink: 0;">
         <button id="btn-combined-cart" class="sort-select-btn" style="width: 24px; height: 24px; border: none; background: ${!isPolar ? 'var(--theme-color)' : 'transparent'}; color: ${!isPolar ? 'white' : 'var(--text-muted)'}; display: flex; align-items: center; justify-content: center;" title="Cartesian Coordinates">
-          <span class="material-symbols-rounded" style="font-size: 16px;">grid_on</span>
+          <span class="material-symbols-rounded font-l">grid_on</span>
         </button>
         <button id="btn-combined-polar" class="sort-select-btn" style="width: 24px; height: 24px; border: none; background: ${isPolar ? 'var(--theme-color)' : 'transparent'}; color: ${isPolar ? 'white' : 'var(--text-muted)'}; display: flex; align-items: center; justify-content: center;" title="Polar Coordinates">
-          <span class="material-symbols-rounded" style="font-size: 16px;">radar</span>
+          <span class="material-symbols-rounded font-l">radar</span>
         </button>
       </div>
     </div>
@@ -513,7 +513,7 @@ function updatePlot() {
             tooltip.style.color = '#fff';
             tooltip.style.padding = '8px 12px';
             tooltip.style.borderRadius = '4px';
-            tooltip.style.fontSize = '12px';
+            tooltip.classList.add('font-m');
             tooltip.style.fontFamily = 'system-ui';
             tooltip.style.pointerEvents = 'none';
             tooltip.style.zIndex = '1000';

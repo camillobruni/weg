@@ -21,12 +21,22 @@
   <div id="app">
     <div id="global-loader" class="hidden">
       <div class="loader-box">
-        <div id="loader-text">Importing tracks...</div>
-        <div id="loader-filename"></div>
-        <div id="loader-progress-wrap">
-          <div id="loader-progress-bar"></div>
+        <button id="loader-close" class="material-symbols-rounded" title="Cancel import">close</button>
+        <div class="loader-icon-wrap">
+          <span class="material-symbols-rounded">download</span>
+          <div id="loader-warning-count">
+            <span>0</span>
+            <span class="material-symbols-rounded font-l">description</span>
+          </div>
         </div>
-        <div id="loader-subtext"></div>
+        <div class="loader-content">
+          <div id="loader-text">Importing tracks</div>
+          <div id="loader-filename"></div>
+          <div id="loader-progress-wrap">
+            <div id="loader-progress-bar"></div>
+          </div>
+          <div id="loader-subtext"></div>
+        </div>
       </div>
     </div>
 
@@ -43,6 +53,7 @@
       </div>
 
       <div id="drop-zone" class="drop-idle" style="cursor: pointer;">
+        <div id="import-warning" class="material-symbols-rounded hidden" style="color: #f59e0b; cursor: pointer; position: absolute; top: 10px; right: 10px;" title="Show skipped imports">warning</div>
         <div class="drop-icon material-symbols-rounded">download</div>
         <div class="drop-primary">Drop GPS files here</div>
         <div class="drop-formats">

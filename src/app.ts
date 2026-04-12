@@ -32,6 +32,16 @@ const TRACK_COLORS: string[] = [
 const POINT_ZOOM_LEVEL = 16;
 
 let tracks: Record<string, TrackData> = {};
+let skippedImports: { name: string; reason: string }[] = [];
+
+function isSameDay(t1: number, t2: number) {
+  const d1 = new Date(t1);
+  const d2 = new Date(t2);
+  return d1.getFullYear() === d2.getFullYear() &&
+         d1.getMonth() === d2.getMonth() &&
+         d1.getDate() === d2.getDate();
+}
+
 let cancelProcessing = false;
 let selectedId: string | null = null;
 let colorIdx = 0;
@@ -245,8 +255,8 @@ document.addEventListener('click', (e) => {
     renderInsights(tracks[selectedId]);
   }
 
-  if (btn.dataset.tab === 'evolution' && selectedId && tracks[selectedId]) {
-    renderEvolution(tracks[selectedId], Object.values(tracks), (trackId, range) => {
+  if (btn.dataset.tab === 'evolution') {
+    renderEvolution(selectedId ? tracks[selectedId] : null, Object.values(tracks), (trackId, range) => {
       selectTrack(trackId, true);
       if (range) {
         ChartView.restoreSelection(range[0], range[1]);
@@ -410,6 +420,7 @@ async function init() {
 
     if (mapLoaderSpan) mapLoaderSpan.textContent = `Preparing ${saved.length} tracks...`;
 
+    const tracksToLoad: TrackData[] = [];
     for (const t of saved) {
       let updated = false;
       if (!t.bounds && t.points.length > 0) {
@@ -427,7 +438,9 @@ async function init() {
         await Storage.save(t);
       }
       tracks[t.id] = t;
+      tracksToLoad.push(t);
     }
+    MapView.addTracks(tracksToLoad);
     applyFilters();
 
     const restoreId = urlState.track && saved.find(t => t.id === urlState.track) 
@@ -485,6 +498,15 @@ async function init() {
         } else {
           if (mapLoader) mapLoader.classList.add('hidden');
           applyFilters(); // Final sync
+          if (selectedId && tracks[selectedId]) {
+            renderEvolution(tracks[selectedId], Object.values(tracks), (trackId, range) => {
+              selectTrack(trackId, true);
+              if (range) {
+                ChartView.restoreSelection(range[0], range[1]);
+                onChartRangeChange(range[0], range[1], 'time', true);
+              }
+            });
+          }
           // Only fit all if no saved map position and we just finished loading everything
           if (saved.length && !urlState.map_pos) MapView.fitAll();
         }
@@ -558,7 +580,13 @@ async function init() {
 
   document.getElementById('metric-pills')?.addEventListener('click', (e) => {
     const pill = (e.target as HTMLElement).closest('.metric-pill') as HTMLElement;
-    if (pill) toggleMetric(pill.dataset.metric!, pill);
+    if (pill) {
+      const metric = pill.dataset.metric;
+      if (metric) {
+        const targetEl = document.querySelector(`.chart-row[data-metric="${metric}"]`);
+        targetEl?.scrollIntoView({ behavior: 'smooth' });
+      }
+    }
   });
 
   // X-axis toggle
@@ -900,8 +928,7 @@ function selectTrack(id: string, fit = true) {
   renderTrackList();
 
   // Render details
-  const activeTabBtn = document.querySelector('.tab-btn.active') as HTMLElement;
-  const activeTab = activeTabBtn ? activeTabBtn.dataset.tab : 'graphs';
+  const activeTab = UrlState.get().tab || 'graphs';
   if (activeTab === 'details') renderDetails(tracks[id], getGlobalTags());
   if (activeTab === 'insights') renderInsights(tracks[id]);
   if (activeTab === 'combined') renderCombined(tracks[id]);
@@ -1326,9 +1353,58 @@ function showToast(msg: string, type: 'info' | 'error' = 'info') {
   }, 3000);
 }
 
+function showSkippedImportsModal() {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  
+  let listHtml = '';
+  skippedImports.forEach(s => {
+    listHtml += `<div style="margin-bottom: 8px;"><strong>${s.name}</strong>: ${s.reason}</div>`;
+  });
+  
+  backdrop.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-title">Skipped Imports</div>
+      <div class="modal-body" style="max-height: 300px; overflow-y: auto;">
+        ${listHtml || '<div>No skipped imports.</div>'}
+      </div>
+      <div class="modal-actions">
+        <button class="modal-btn clear">Clear List</button>
+        <button class="modal-btn cancel">Close</button>
+      </div>
+    </div>
+  `;
+  
+  document.body.appendChild(backdrop);
+  
+  const btnCancel = backdrop.querySelector('.modal-btn.cancel') as HTMLButtonElement;
+  const btnClear = backdrop.querySelector('.modal-btn.clear') as HTMLButtonElement;
+  const close = () => backdrop.remove();
+  
+  btnCancel.addEventListener('click', close);
+  btnClear.addEventListener('click', () => {
+    skippedImports = [];
+    close();
+    const importWarning = document.getElementById('import-warning');
+    if (importWarning) importWarning.classList.add('hidden');
+  });
+  
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) close();
+  });
+}
+
 function initDropZone() {
   const zone = document.getElementById('drop-zone');
   if (!zone) return;
+
+  const importWarning = document.getElementById('import-warning');
+  if (importWarning) {
+    importWarning.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showSkippedImportsModal();
+    });
+  }
 
   window.addEventListener('dragover', (e) => {
     e.preventDefault();
@@ -1386,17 +1462,56 @@ function initDropZone() {
 async function handleFiles(files: File[]) {
   if (!files.length) return;
   cancelProcessing = false;
+  const initialSkipCount = skippedImports.length;
   
   const loader = document.getElementById('global-loader');
   const loaderText = document.getElementById('loader-text');
   const loaderSubtext = document.getElementById('loader-subtext');
   const progressBar = document.getElementById('loader-progress-bar') as HTMLElement;
+  const loaderClose = document.getElementById('loader-close');
+
+  if (loaderClose) {
+    loaderClose.addEventListener('click', () => {
+      cancelProcessing = true;
+      if (loader) loader.classList.add('hidden');
+    });
+  }
+
+  function updateLoaderIconToWarning() {
+    const loaderIcon = document.querySelector('.loader-icon-wrap span') as HTMLElement;
+    if (loaderIcon) {
+      loaderIcon.textContent = 'warning';
+      loaderIcon.style.color = '#f59e0b';
+    }
+    const warningCount = document.getElementById('loader-warning-count');
+    if (warningCount) {
+      const count = skippedImports.length - initialSkipCount;
+      const countSpan = warningCount.querySelector('span');
+      if (countSpan) countSpan.textContent = `${count}`;
+      warningCount.style.display = 'flex';
+    }
+  }
 
   if (loader) {
-    if (loaderText) loaderText.textContent = `Importing ${files.length} file${files.length > 1 ? 's' : ''}...`;
+    if (loaderText) loaderText.textContent = `Importing ${files.length} file${files.length > 1 ? 's' : ''}`;
+    const loaderIcon = document.querySelector('.loader-icon-wrap span') as HTMLElement;
+    if (loaderIcon) {
+      loaderIcon.textContent = 'download';
+      loaderIcon.style.color = 'var(--accent)';
+    }
+    const warningCount = document.getElementById('loader-warning-count');
+    if (warningCount) {
+      warningCount.style.display = 'none';
+      const countSpan = warningCount.querySelector('span');
+      if (countSpan) countSpan.textContent = '0';
+    }
     if (loaderSubtext) loaderSubtext.textContent = '';
     if (progressBar) progressBar.style.width = '0%';
     loader.classList.remove('hidden');
+    
+    if (skippedImports.length > initialSkipCount) {
+      updateLoaderIconToWarning();
+    }
   }
 
   try {
@@ -1410,8 +1525,21 @@ async function handleFiles(files: File[]) {
       return name.endsWith('.gpx') || name.endsWith('.fit') || name.endsWith('.tcx') || name.endsWith('.kml');
     });
 
+    const invalidFiles = files.filter(f => !validFiles.includes(f));
+    invalidFiles.forEach(f => {
+      skippedImports.push({ name: f.name, reason: 'Unsupported file format' });
+    });
+
     if (validFiles.length === 0) {
-      if (files.length > 0) showToast('No valid GPS files found', 'error');
+      if (files.length > 0) {
+        showToast('No valid GPS files found', 'error');
+        // Still update warning icon if there were invalid files!
+        const importWarning = document.getElementById('import-warning');
+        if (importWarning && skippedImports.length > 0) {
+          importWarning.classList.remove('hidden');
+          importWarning.title = `Skipped ${skippedImports.length} imports. Click to view details.`;
+        }
+      }
       return;
     }
 
@@ -1429,6 +1557,52 @@ async function handleFiles(files: File[]) {
 
       try {
         const data = await Parsers.parseFile(f);
+        
+        // Duplicate checks
+        const existingTracks = Object.values(tracks);
+        
+        // Rule 1: Same file and same size
+        const sameFile = existingTracks.find(t => t.fileName === f.name && t.fileSize === f.size);
+        if (sameFile) {
+          skippedImports.push({ name: f.name, reason: 'Same File' });
+          updateLoaderIconToWarning();
+          continue;
+        }
+        
+        // Rule 2 & 3: Same start day checks
+        const newStart = data.stats.startTime;
+        const newDuration = data.stats.duration;
+        
+        if (newStart != null && newDuration != null) {
+          const newEnd = newStart + newDuration;
+          const sameDayTracks = existingTracks.filter(t => t.stats.startTime != null && isSameDay(newStart, t.stats.startTime!));
+          
+          let discarded = false;
+          for (const ext of sameDayTracks) {
+            const extStart = ext.stats.startTime!;
+            const extDuration = ext.stats.duration!;
+            const extEnd = extStart + extDuration;
+            
+            // Rule 2: Fully contained
+            if (newStart >= extStart && newEnd <= extEnd) {
+              skippedImports.push({ name: f.name, reason: 'Fully contained in another track' });
+              updateLoaderIconToWarning();
+              discarded = true;
+              break;
+            }
+            
+            // Rule 3: Overlaps for > 10 mins
+            const overlap = Math.min(newEnd, extEnd) - Math.max(newStart, extStart);
+            if (overlap > 600000) { // 10 mins in ms
+              skippedImports.push({ name: f.name, reason: 'Overlaps with an existing track for more than 10 mins' });
+              updateLoaderIconToWarning();
+              discarded = true;
+              break;
+            }
+          }
+          if (discarded) continue;
+        }
+
         let id = compactId(data.stats.startTime || Date.now());
         if (tracks[id]) {
           id += '-' + shortRandom();
@@ -1456,6 +1630,8 @@ async function handleFiles(files: File[]) {
           id,
           name: trackName,
           displayName,
+          fileName: f.name,
+          fileSize: f.size,
           bounds: calculateBounds(data.points) || undefined,
           simplifiedPoints: simplifyTrack(data.points, 50), // 50m resolution
           addedAt: Date.now(),
@@ -1478,7 +1654,19 @@ async function handleFiles(files: File[]) {
           await new Promise(r => setTimeout(r, 0));
         }
       } catch (err) {
-        console.error(`Failed to parse file: ${f.name}`, err);
+        skippedImports.push({ name: f.name, reason: `Parse error: ${err instanceof Error ? err.message : String(err)}` });
+        updateLoaderIconToWarning();
+      }
+    }
+
+    // Update warning icon
+    const importWarning = document.getElementById('import-warning');
+    if (importWarning) {
+      if (skippedImports.length > 0) {
+        importWarning.classList.remove('hidden');
+        importWarning.title = `Skipped ${skippedImports.length} imports. Click to view details.`;
+      } else {
+        importWarning.classList.add('hidden');
       }
     }
 
@@ -1486,6 +1674,14 @@ async function handleFiles(files: File[]) {
       showToast(`Imported ${count} track${count > 1 ? 's' : ''}`);
       applyFilters();
       if (firstId) selectTrack(firstId);
+    }
+
+    const newWarnings = skippedImports.length > initialSkipCount;
+    if (newWarnings) {
+      const loaderIcon = document.querySelector('.loader-icon-wrap span');
+      if (loaderIcon) loaderIcon.textContent = 'warning';
+      // Delay hiding loader to let user see the alert icon
+      await new Promise(r => setTimeout(r, 1500));
     }
   } finally {
     if (loader) loader.classList.add('hidden');
