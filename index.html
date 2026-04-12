@@ -17,15 +17,25 @@
     }
   </script>
 </head>
-<body>
+<body class="loading-fonts">
   <div id="app">
     <div id="global-loader" class="hidden">
       <div class="loader-box">
-        <div class="spinner"></div>
-        <div id="loader-text">Importing tracks...</div>
-        <div id="loader-subtext"></div>
-        <div id="loader-progress-wrap">
-          <div id="loader-progress-bar"></div>
+        <button id="loader-close" class="material-symbols-rounded" title="Cancel import">close</button>
+        <div class="loader-icon-wrap">
+          <span class="material-symbols-rounded">download</span>
+          <div id="loader-warning-count">
+            <span>0</span>
+            <span class="material-symbols-rounded font-l">description</span>
+          </div>
+        </div>
+        <div class="loader-content">
+          <div id="loader-text">Importing tracks</div>
+          <div id="loader-filename"></div>
+          <div id="loader-progress-wrap">
+            <div id="loader-progress-bar"></div>
+          </div>
+          <div id="loader-subtext"></div>
         </div>
       </div>
     </div>
@@ -43,6 +53,7 @@
       </div>
 
       <div id="drop-zone" class="drop-idle" style="cursor: pointer;">
+        <div id="import-warning" class="material-symbols-rounded hidden" style="color: #f59e0b; cursor: pointer; position: absolute; top: 10px; right: 10px;" title="Show skipped imports">warning</div>
         <div class="drop-icon material-symbols-rounded">download</div>
         <div class="drop-primary">Drop GPS files here</div>
         <div class="drop-formats">
@@ -199,10 +210,11 @@
       <!-- Chart panel -->
       <div id="chart-panel">
         <div id="tab-nav">
-          <button class="tab-btn active" data-tab="graphs">Analysis</button>
-          <button class="tab-btn" data-tab="insights">Insights</button>
-          <button class="tab-btn" data-tab="details">Details</button>
-          <button class="tab-btn" data-tab="combined">Combined</button>
+          <button class="tab-btn active" data-tab="graphs"><span class="material-symbols-rounded">monitoring</span>Analysis</button>
+          <button class="tab-btn" data-tab="insights"><span class="material-symbols-rounded">analytics</span>Insights</button>
+          <button class="tab-btn" data-tab="details"><span class="material-symbols-rounded">list_alt</span>Details</button>
+          <button class="tab-btn" data-tab="combined"><span class="material-symbols-rounded">layers</span>Combined</button>
+          <button class="tab-btn" data-tab="evolution"><span class="material-symbols-rounded">timeline</span>Progress</button>
         </div>
 
         <div id="tab-graphs" class="tab-content active">
@@ -316,6 +328,15 @@
             <div id="combined-empty" class="empty-state">
               <span class="material-symbols-rounded empty-icon">no_sim</span>
               <div class="empty-text">Select a track for combined analysis</div>
+            </div>
+          </div>
+        </div>
+
+        <div id="tab-evolution" class="tab-content">
+          <div id="evolution-view">
+            <div id="evolution-empty" class="empty-state">
+              <span class="material-symbols-rounded empty-icon">no_sim</span>
+              <div class="empty-text">Select a track for progress analysis</div>
             </div>
           </div>
         </div>
