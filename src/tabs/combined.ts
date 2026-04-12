@@ -14,9 +14,10 @@ let plot: uPlot | null = null;
 let xMetric = 'power';
 let yMetric = 'hr';
 let currentSliderIdx: number | null = null;
-let currentChronoData: [number, number, number, number, number][] = [];
-let currentSortedData: [number, number, number, number, number][] = [];
+let currentChronoData: [number, number, number, number, number, number, number][] = [];
+let currentSortedData: [number, number, number, number, number, number, number][] = [];
 let playIntervalId: number | null = null;
+let isPolar = false;
 
 function updateSliderLabel() {
   const sliderVal = document.getElementById('combined-time-val');
@@ -101,6 +102,14 @@ export function renderCombined(track: TrackData | null) {
           <span class="material-symbols-rounded">play_arrow</span>
         </button>
       </div>
+      <div class="toggle-group" style="display: flex; align-items: center; background: var(--surface3); border-radius: 4px; padding: 2px; border: 1px solid var(--border); flex-shrink: 0;">
+        <button id="btn-combined-cart" class="sort-select-btn" style="width: 24px; height: 24px; border: none; background: ${!isPolar ? 'var(--surface1)' : 'transparent'}; color: ${!isPolar ? 'var(--text)' : 'var(--text-muted)'}; display: flex; align-items: center; justify-content: center;" title="Cartesian Coordinates">
+          <span class="material-symbols-rounded" style="font-size: 16px;">grid_on</span>
+        </button>
+        <button id="btn-combined-polar" class="sort-select-btn" style="width: 24px; height: 24px; border: none; background: ${isPolar ? 'var(--surface1)' : 'transparent'}; color: ${isPolar ? 'var(--text)' : 'var(--text-muted)'}; display: flex; align-items: center; justify-content: center;" title="Polar Coordinates">
+          <span class="material-symbols-rounded" style="font-size: 16px;">radar</span>
+        </button>
+      </div>
     </div>
     <div id="combined-plot-container" style="width: 100%; flex: 1; min-height: 0; background: var(--surface2); padding: 0; overflow: hidden;"></div>
   `;
@@ -168,6 +177,20 @@ export function renderCombined(track: TrackData | null) {
     }
   });
 
+  document.getElementById('btn-combined-cart')?.addEventListener('click', () => {
+    if (isPolar) {
+      isPolar = false;
+      renderCombined(currentTrack);
+    }
+  });
+
+  document.getElementById('btn-combined-polar')?.addEventListener('click', () => {
+    if (!isPolar) {
+      isPolar = true;
+      renderCombined(currentTrack);
+    }
+  });
+
   updatePlot();
 }
 
@@ -179,7 +202,12 @@ export function resizeCombined() {
     const h = plotContainer.clientHeight;
     
     if (w > 0 && h > 0) {
-      plot.setSize({ width: w, height: h });
+      if (isPolar) {
+        const size = Math.min(w, h);
+        plot.setSize({ width: size, height: size });
+      } else {
+        plot.setSize({ width: w, height: h });
+      }
     }
   }
 }
@@ -249,20 +277,38 @@ function updatePlot() {
 
   const pts = currentTrack.points;
   const t0 = pts[0].time || 0;
-  currentChronoData = pts
+  const chronoData = pts
     .map((p, idx) => [(p as any)[xDef.field], (p as any)[yDef.field], (p.time! - t0) / 1000, (p.dist || 0) / 1000, idx])
     .filter(([x, y, t, d]) => x != null && y != null) as [number, number, number, number, number][];
-
-  const chronoData = currentChronoData;
 
   if (chronoData.length === 0) {
     container.innerHTML = '<div class="empty-text" style="display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-dim);">No data for selected metrics</div>';
     return;
   }
 
+  if (isPolar) {
+    const xVals = chronoData.map(d => d[0]);
+    const yVals = chronoData.map(d => d[1]);
+    const xMin = Math.min(...xVals);
+    const xMax = Math.max(...xVals);
+    const yMin = Math.min(...yVals);
+    const yMax = Math.max(...yVals);
+
+    currentChronoData = chronoData.map(d => {
+      const xVal = d[0];
+      const yVal = d[1];
+      const theta = (xVal - xMin) / (xMax - xMin || 1) * 2 * Math.PI;
+      const r = (yVal - yMin) / (yMax - yMin || 1);
+      const px = r * Math.cos(theta);
+      const py = r * Math.sin(theta);
+      return [px, py, d[2], d[3], d[4], xVal, yVal] as any;
+    });
+  } else {
+    currentChronoData = chronoData.map(d => [d[0], d[1], d[2], d[3], d[4], d[0], d[1]] as any);
+  }
+
   // Update slider
   const slider = document.getElementById('combined-time-slider') as HTMLInputElement;
-  const sliderVal = document.getElementById('combined-time-val');
   if (slider) {
     slider.max = `${chronoData.length - 1}`;
     if (currentSliderIdx === null || currentSliderIdx >= chronoData.length) {
@@ -273,16 +319,34 @@ function updatePlot() {
   }
 
   // Sort by X for uPlot
-  currentSortedData = [...chronoData].sort((a, b) => a[0] - b[0]);
-  const sortedData = currentSortedData;
+  currentSortedData = [...currentChronoData].sort((a, b) => a[0] - b[0]);
 
-  const xData = sortedData.map(d => d[0]);
-  const yData = sortedData.map(d => d[1]);
+  const xData = currentSortedData.map(d => d[0]);
+  const yData = currentSortedData.map(d => d[1]);
 
   const plotContainer = document.getElementById('combined-plot-container');
+  let width = (plotContainer && plotContainer.clientWidth > 0) ? plotContainer.clientWidth : 600;
+  let height = (plotContainer && plotContainer.clientHeight > 0) ? plotContainer.clientHeight : 400;
+
+  if (isPolar) {
+    const size = Math.min(width, height > 0 ? height : width);
+    width = size;
+    height = size;
+    
+    if (plotContainer) {
+      plotContainer.style.display = 'flex';
+      plotContainer.style.alignItems = 'center';
+      plotContainer.style.justifyContent = 'center';
+    }
+  } else if (plotContainer) {
+    plotContainer.style.display = '';
+    plotContainer.style.alignItems = '';
+    plotContainer.style.justifyContent = '';
+  }
+
   const opts: uPlot.Options = {
-    width: (plotContainer && plotContainer.clientWidth > 0) ? plotContainer.clientWidth : 600,
-    height: (plotContainer && plotContainer.clientHeight > 0) ? plotContainer.clientHeight : 400,
+    width: width,
+    height: height,
     padding: [10, 15, 0, 0],
     scales: {
       x: { time: false, auto: true },
@@ -299,19 +363,21 @@ function updatePlot() {
     axes: [
       {
         side: 2, // bottom
+        show: !isPolar,
         label: `${xDef.label} (${xDef.unit})`,
         stroke: '#555564',
         grid: { stroke: '#2e2e34', width: 1 },
-        font: '10px system-ui',
+        font: '10px system-ui, sans-serif',
         values: (u, vals) => vals.map(v => v != null ? xDef.fmtAxis(v) : ''),
         size: 30,
       },
       {
         side: 3, // left
+        show: !isPolar,
         label: `${yDef.label} (${yDef.unit})`,
         stroke: '#555564',
         grid: { stroke: '#2e2e34', width: 1 },
-        font: '10px system-ui',
+        font: '10px system-ui, sans-serif',
         values: (u, vals) => vals.map(v => v != null ? yDef.fmtAxis(v) : ''),
         size: 40,
       },
@@ -368,8 +434,8 @@ function updatePlot() {
           ctx.lineWidth = 1 * dpr;
           
           let started = false;
-          for (let i = 0; i < chronoData.length; i++) {
-            const [xVal, yVal] = chronoData[i];
+          for (let i = 0; i < currentChronoData.length; i++) {
+            const [xVal, yVal] = currentChronoData[i];
             const cx = u.valToPos(xVal, 'x', true);
             const cy = u.valToPos(yVal, 'y', true);
             
@@ -392,8 +458,8 @@ function updatePlot() {
             
             // 1. Draw increasingly thicker connection line for the trail
             for (let i = startIdx; i < endIdx; i++) {
-              const [xVal1, yVal1] = chronoData[i];
-              const [xVal2, yVal2] = chronoData[i+1];
+              const [xVal1, yVal1] = currentChronoData[i];
+              const [xVal2, yVal2] = currentChronoData[i+1];
               const cx1 = u.valToPos(xVal1, 'x', true);
               const cy1 = u.valToPos(yVal1, 'y', true);
               const cx2 = u.valToPos(xVal2, 'x', true);
@@ -413,7 +479,7 @@ function updatePlot() {
 
             // 2. Draw dots on top
             for (let i = startIdx; i <= endIdx; i++) {
-              const [xVal, yVal] = chronoData[i];
+              const [xVal, yVal] = currentChronoData[i];
               const cx = u.valToPos(xVal, 'x', true);
               const cy = u.valToPos(yVal, 'y', true);
               
@@ -457,7 +523,12 @@ function updatePlot() {
           }
 
           if (idx != null && currentSortedData[idx] && u.cursor.left! >= 0) {
-            const [xVal, yVal, timeSecs, distKm] = currentSortedData[idx];
+            const d = currentSortedData[idx];
+            const timeSecs = d[2];
+            const distKm = d[3];
+            const origX = d[5];
+            const origY = d[6];
+            
             tooltip.innerHTML = `
               <div style="color: #8a8a93; margin-bottom: 4px;">Point #${idx}</div>
               <div style="display: flex; justify-content: space-between; gap: 15px;">
@@ -470,11 +541,11 @@ function updatePlot() {
               </div>
               <div style="display: flex; justify-content: space-between; gap: 15px;">
                 <span>${xDef.label}:</span>
-                <span style="font-weight: bold;">${xDef.fmtAxis(xVal)} ${xDef.unit}</span>
+                <span style="font-weight: bold;">${xDef.fmtAxis(origX)} ${xDef.unit}</span>
               </div>
               <div style="display: flex; justify-content: space-between; gap: 15px;">
                 <span>${yDef.label}:</span>
-                <span style="font-weight: bold; color: ${yDef.color}">${yDef.fmtAxis(yVal)} ${yDef.unit}</span>
+                <span style="font-weight: bold; color: ${yDef.color}">${yDef.fmtAxis(origY)} ${yDef.unit}</span>
               </div>
             `;
             tooltip.style.display = 'block';

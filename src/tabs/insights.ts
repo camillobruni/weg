@@ -410,11 +410,13 @@ function renderCurveCard(opts: CurveCardOptions) {
           show: true,
           values: () => [],
           ticks: { show: false },
+          font: '10px system-ui, sans-serif',
         },
         {
           stroke: '#555564',
           grid: { stroke: '#2e2e34', width: 1 },
           values: (_u, vals) => vals.map((v) => `${v}${unit}`),
+          font: '10px system-ui, sans-serif',
         },
       ],
       cursor: {
@@ -489,7 +491,7 @@ function renderCurveCard(opts: CurveCardOptions) {
 
               const durVal = xData[idx!];
               curYVal.innerHTML = `${fmtDuration(durVal)}: ${yData[idx!]} ${unit}`;
-              curYVal.style.transform = `translate(${cx}px, ${cy}px) translate(6px, -50%)`;
+              curYVal.style.transform = `translate(${cx}px, ${cy}px) translate(15px, 15px)`;
               curYVal.style.display = '';
 
               const pcx = u.valToPos(xData[idx!]!, 'x', true);

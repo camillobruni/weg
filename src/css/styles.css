@@ -638,7 +638,9 @@ body.dragging-sidebar {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 3px;
+  padding: 2px;
+  height: 24px;
+  box-sizing: border-box;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   align-items: center;
   gap: 0;
@@ -754,7 +756,9 @@ body.dragging-sidebar {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 4px 10px;
+  padding: 0 10px;
+  height: 24px;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1371,6 +1375,22 @@ body.dragging-sidebar {
   gap: 12px;
   padding: 8px 14px 4px 14px;
   min-height: 28px;
+}
+
+.progress-chart-row {
+  display: flex;
+  flex-direction: column;
+}
+
+.progress-chart-row .chart-row-header {
+  height: 36px;
+  box-sizing: border-box;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.progress-chart-row .chart-row-body {
+  flex: 1;
 }
 
 .chart-row-label-group {

@@ -14,7 +14,7 @@ import { ChartView } from './charts';
 import { renderDetails, initDetails } from './tabs/details';
 import { renderInsights, initInsights } from './tabs/insights';
 import { renderCombined, initCombined, resizeCombined } from './tabs/combined';
-import { renderEvolution } from './tabs/evolution';
+import { renderEvolution } from './tabs/progress';
 import { fmtSecs, escHtml, fmtDate, getTagColor, compactId, shortRandom } from './utils';
 
 const TRACK_COLORS: string[] = [
@@ -246,7 +246,13 @@ document.addEventListener('click', (e) => {
   }
 
   if (btn.dataset.tab === 'evolution' && selectedId && tracks[selectedId]) {
-    renderEvolution(tracks[selectedId], Object.values(tracks));
+    renderEvolution(tracks[selectedId], Object.values(tracks), (trackId, range) => {
+      selectTrack(trackId, true);
+      if (range) {
+        ChartView.restoreSelection(range[0], range[1]);
+        onChartRangeChange(range[0], range[1], 'time', true);
+      }
+    });
   }
 
   if (btn.dataset.tab === 'combined' && selectedId && tracks[selectedId]) {
@@ -796,7 +802,7 @@ function onChartCursorMove(pt: TrackPoint | null) {
   }
 }
 
-function onChartRangeChange(min: number | null, max: number | null, axis: string) {
+function onChartRangeChange(min: number | null, max: number | null, axis: string, fit = false) {
   if (!selectedId || !tracks[selectedId]) return;
   const t = tracks[selectedId];
 
@@ -831,7 +837,7 @@ function onChartRangeChange(min: number | null, max: number | null, axis: string
   ChartView.setSelectionStats(stats);
   renderInsights(t);
 
-  MapView.highlightSegment(selectedId, pts, iMin, iMax, false, currentMapColors);
+  MapView.highlightSegment(selectedId, pts, iMin, iMax, fit, currentMapColors);
   MapView.ensureVisible(selPts.map(p => [p.lat, p.lon] as [number, number]));
   UrlState.patch({ sel: [min, max] });
 }
@@ -874,7 +880,15 @@ function selectTrack(id: string, fit = true) {
   if (activeTab === 'details') renderDetails(tracks[id], getGlobalTags());
   if (activeTab === 'insights') renderInsights(tracks[id]);
   if (activeTab === 'combined') renderCombined(tracks[id]);
-  if (activeTab === 'evolution') renderEvolution(tracks[id], Object.values(tracks));
+  if (activeTab === 'evolution') {
+    renderEvolution(tracks[id], Object.values(tracks), (trackId, range) => {
+      selectTrack(trackId, true);
+      if (range) {
+        ChartView.restoreSelection(range[0], range[1]);
+        onChartRangeChange(range[0], range[1], 'time', true);
+      }
+    });
+  }
 
   // Tell sub-views
   MapView.setSelectedTrack(id, fit);
