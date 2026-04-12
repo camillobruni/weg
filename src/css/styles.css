@@ -2241,3 +2241,171 @@ body.dragging-sidebar {
 .u-legend {
   font-size: var(--fs-m) !important;
 }
+
+/* Courses Tab */
+.courses-container {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+
+.courses-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.course-item {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+  overflow: hidden;
+}
+
+.course-item:hover {
+  background: var(--surface3);
+  border-color: var(--border-high);
+}
+
+.course-item-header {
+  padding: 6px 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+.course-name {
+  font-weight: 600;
+  flex: 1;
+}
+
+.course-meta {
+  color: var(--text-muted);
+  font-size: var(--fs-s);
+}
+
+.course-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.course-actions .icon-btn {
+  opacity: 0.5;
+  transition: opacity 0.2s;
+}
+
+.course-item:hover .course-actions .icon-btn {
+  opacity: 1;
+}
+
+.expand-icon {
+  color: var(--text-muted);
+  transition: transform 0.2s;
+}
+
+.course-tracks {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--surface1);
+}
+
+.course-tracks-title {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+.course-tracks-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-s);
+  color: var(--text);
+}
+
+.course-tracks-table th,
+.course-tracks-table td {
+  padding: 6px 8px;
+  text-align: right;
+  border-bottom: 1px solid var(--border-low);
+}
+
+.course-tracks-table th:first-child,
+.course-tracks-table td:first-child,
+.course-tracks-table th:nth-child(2),
+.course-tracks-table td:nth-child(2) {
+  text-align: left;
+}
+
+.course-tracks-table td:not(:first-child) {
+  white-space: nowrap;
+}
+
+.course-tracks-table th {
+  font-weight: 600;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.course-tracks-table tr:last-child td {
+  border-bottom: none;
+}
+
+.course-tracks-table th:first-child,
+.course-tracks-table td:first-child {
+  width: 100%;
+}
+
+.course-track-row:hover {
+  background: var(--surface2);
+}
+
+.track-name-cell.clickable {
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.track-name-cell.clickable:hover {
+  text-decoration: underline;
+}
+
+.metric-icon {
+  font-size: 16px;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+
+.metric-icon.duration {
+  color: var(--text-muted);
+}
+
+.metric-icon.speed {
+  color: #4caf50;
+}
+
+.metric-icon.power {
+  color: #ff9800;
+}
+
+.metric-icon.hr {
+  color: #f44336;
+}
+
+.course-point-marker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

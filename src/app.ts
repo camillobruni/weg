@@ -15,6 +15,7 @@ import { renderDetails, initDetails } from './tabs/details';
 import { renderInsights, initInsights } from './tabs/insights';
 import { renderCombined, initCombined, resizeCombined } from './tabs/combined';
 import { renderEvolution } from './tabs/progress';
+import { renderCourses, initCourses } from './tabs/courses';
 import { fmtSecs, escHtml, fmtDate, getTagColor, compactId, shortRandom } from './utils';
 
 const TRACK_COLORS: string[] = [
@@ -274,6 +275,10 @@ document.addEventListener('click', (e) => {
     renderCombined(tracks[selectedId]);
   }
 
+  if (btn.dataset.tab === 'courses') {
+    renderCourses();
+  }
+
   if (btn.dataset.tab === 'graphs') {
     ChartView.resize();
     updateToolbarLayout();
@@ -318,6 +323,7 @@ async function init() {
     }
   );
   initCombined();
+  initCourses((msg: string, type?: string) => showToast(msg, type === 'error' ? 'error' : 'info'));
 
   // Init sub-systems
   MapView.init(
@@ -887,6 +893,7 @@ function selectTrack(id: string, fit = true) {
   if (activeTab === 'details') renderDetails(tracks[id], getGlobalTags());
   if (activeTab === 'insights') renderInsights(tracks[id]);
   if (activeTab === 'combined') renderCombined(tracks[id]);
+  if (activeTab === 'courses') renderCourses();
   if (activeTab === 'evolution') {
     renderEvolution(tracks[id], Object.values(tracks), (trackId, range) => {
       selectTrack(trackId, true);

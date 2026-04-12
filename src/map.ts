@@ -23,6 +23,7 @@ export const MapView = (() => {
   let onPointClickCb: (id: string, idx: number) => void;
   let onPointHoverCb: (id: string | null, idx: number | null) => void;
   let onDblClickCb: () => void;
+  let customClickHandler: ((e: L.LeafletMouseEvent) => boolean) | null = null;
 
   const GAP_THRESHOLD: number = 60000; // 1 minute in ms
 
@@ -399,6 +400,7 @@ export const MapView = (() => {
     });
 
     map.on('click', (e: L.LeafletMouseEvent) => {
+      if (customClickHandler && customClickHandler(e)) return;
       const tracksFound = findNearestTracks(e.latlng);
       if (tracksFound.length === 0) return;
       
@@ -657,6 +659,30 @@ export const MapView = (() => {
         }
       }
     });
+  }
+
+  function setTrackHover(id: string, isHovered: boolean) {
+    const pl = polylines[id];
+    if (!pl) return;
+    const isSelected = id === selectedId;
+    const weight = isHovered ? 4 : (isSelected ? 3 : 1.5);
+    const opacity = isHovered ? 0.8 : (isSelected ? 0.2 : 0.6);
+    
+    pl.eachLayer((layer: any) => {
+      if (layer.setStyle) {
+        if (layer.options.color === '#888896') {
+          layer.setStyle({ weight, opacity: isHovered ? 1 : (isSelected ? 1 : 0.8) });
+        } else {
+          layer.setStyle({ weight, opacity });
+        }
+      }
+    });
+    
+    if (isHovered) {
+      pl.bringToFront();
+    } else if (selectedId && polylines[selectedId]) {
+      polylines[selectedId].bringToFront();
+    }
   }
 
   function setSelectedTrack(id: string | null, _fit = true) {
@@ -932,8 +958,73 @@ export const MapView = (() => {
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 
+  function findTracksPassingThroughPoints(points: {lat: number, lng: number}[], radius: number): string[] {
+    if (points.length === 0) return [];
+    
+    let candidateIds: Set<string> | null = null;
+    
+    for (const pt of points) {
+      const deg = radius / 111000;
+      const bounds = {
+        minLat: pt.lat - deg,
+        maxLat: pt.lat + deg,
+        minLon: pt.lng - deg,
+        maxLon: pt.lng + deg
+      };
+      
+      const ids = spatialIndex.query(bounds);
+      
+      if (candidateIds === null) {
+        candidateIds = ids;
+      } else {
+        const intersection = new Set<string>();
+        for (const id of candidateIds) {
+          if (ids.has(id)) {
+            intersection.add(id);
+          }
+        }
+        candidateIds = intersection;
+      }
+      
+      if (candidateIds.size === 0) break;
+    }
+    
+    if (!candidateIds || candidateIds.size === 0) return [];
+    
+    const matchingIds: string[] = [];
+    
+    for (const id of candidateIds) {
+      const track = trackData[id];
+      if (!track) continue;
+      
+      let passesAll = true;
+      for (const pt of points) {
+        let passesPoint = false;
+        for (const trackPt of track.points) {
+          const d = haversine(pt.lat, pt.lng, trackPt.lat, trackPt.lon);
+          if (d <= radius) {
+            passesPoint = true;
+            break;
+          }
+        }
+        if (!passesPoint) {
+          passesAll = false;
+          break;
+        }
+      }
+      
+      if (passesAll) {
+        matchingIds.push(id);
+      }
+    }
+    
+    return matchingIds;
+  }
+
   return {
     init,
+    getMap: () => map,
+    setCustomClickHandler: (handler: typeof customClickHandler) => { customClickHandler = handler; },
     switchBasemap,
     addTrack,
     addTracks,
@@ -946,6 +1037,7 @@ export const MapView = (() => {
     hideCursor,
     highlightSegment,
     clearHighlight,
+    setTrackHover,
     ensureVisible,
     centerOn,
     closePopup,
@@ -954,5 +1046,7 @@ export const MapView = (() => {
     setPosition,
     colorTrackByMetric,
     clearMetricColor,
+    findTracksPassingThroughPoints,
+    getTrackData: (id: string) => trackData[id],
   };
 })();
