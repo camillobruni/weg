@@ -7,10 +7,14 @@
 import { TrackData } from '../parsers';
 import { Storage } from '../storage';
 import { fmtSecs, escHtml, fmtDateTime, getTagColor, fmtFileSize } from '../utils';
+import { SPORTS, getSportIcon } from '../sports';
+import { Metrics } from '../metrics';
 
 let onTagsChangeCb: () => void = () => {};
-export function initDetails(onTagsChange: () => void) {
+let onDeleteTrackCb: (id: string) => void = () => {};
+export function initDetails(onTagsChange: () => void, onDeleteTrack: (id: string) => void) {
   onTagsChangeCb = onTagsChange;
+  onDeleteTrackCb = onDeleteTrack;
 }
 
 export function renderDetails(track: TrackData | null, globalTags: string[] = []) {
@@ -27,7 +31,7 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
 
   container.innerHTML = `
     <div id="details-header" style="margin-bottom: 24px;">
-      <div class="details-title" style="font-size: 20px; font-weight: 800; margin-bottom: 4px;">${escHtml(track.name)}</div>
+      <input type="text" id="details-title-input" value="${escHtml(track.displayName || track.name)}" class="font-l" style="font-weight: 800; border: none; background: transparent; width: 100%; color: var(--text-color); margin-bottom: 4px; outline: none;" />
     </div>
 
     <div class="insights-grid" id="details-grid">
@@ -35,11 +39,11 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
         <div class="insight-title"><span class="material-symbols-rounded">label</span>Tags</div>
         <div id="tag-container" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:4px"></div>
         <div style="margin-top:12px; display:flex; gap:8px">
-          <input type="text" id="new-tag-input" list="global-tags-list" placeholder="Add tag..." style="flex:1; background:var(--surface); border:1px solid var(--border); border-radius:4px; padding:4px 8px; color:var(--text); font-size:12px; outline:none; border:1px solid var(--border)">
+          <input type="text" id="new-tag-input" list="global-tags-list" placeholder="Add tag..." class="font-m" style="flex:1; background:var(--surface); border:1px solid var(--border); border-radius:4px; padding:4px 8px; color:var(--text); outline:none; border:1px solid var(--border)">
           <datalist id="global-tags-list">
             ${globalTags.map(t => `<option value="${escHtml(t)}">`).join('')}
           </datalist>
-          <button id="btn-add-tag" class="icon-btn mini" style="background:var(--surface2); border:1px solid var(--border); height:26px; width:26px"><span class="material-symbols-rounded" style="font-size:16px">add</span></button>
+          <button id="btn-add-tag" class="icon-btn mini" style="background:var(--surface2); border:1px solid var(--border); height:26px; width:26px"><span class="material-symbols-rounded font-l">add</span></button>
         </div>
       </div>
 
@@ -47,26 +51,26 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
         <div class="insight-title"><span class="material-symbols-rounded">analytics</span>Activity Summary</div>
         <div class="details-grid" style="grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 4px">
           <div class="details-card" style="padding: 12px">
-            <div class="details-card-label" style="font-size:10px">Distance</div>
-            <div class="details-card-value" style="font-size:16px">${(s.totalDist / 1000).toFixed(2)} km</div>
+            <div class="details-card-label font-s">Distance</div>
+            <div class="details-card-value font-l">${(s.totalDist / 1000).toFixed(2)} km</div>
           </div>
           <div class="details-card" style="padding: 12px">
-            <div class="details-card-label" style="font-size:10px">Duration</div>
-            <div class="details-card-value" style="font-size:16px">${s.duration ? fmtSecs(Math.floor(s.duration / 1000)) : '—'}</div>
+            <div class="details-card-label font-s">Duration</div>
+            <div class="details-card-value font-l">${s.duration ? fmtSecs(Math.floor(s.duration / 1000)) : '—'}</div>
           </div>
           <div class="details-card" style="padding: 12px">
-            <div class="details-card-label" style="font-size:10px">Avg Speed</div>
-            <div class="details-card-value" style="font-size:16px">${s.avgSpeed ? (s.avgSpeed * 3.6).toFixed(1) : '—'} km/h</div>
+            <div class="details-card-label font-s">Avg Speed</div>
+            <div class="details-card-value font-l">${s.avgSpeed ? (s.avgSpeed * 3.6).toFixed(1) : '—'} km/h</div>
           </div>
           <div class="details-card" style="padding: 12px">
-            <div class="details-card-label" style="font-size:10px">Max Speed</div>
-            <div class="details-card-value" style="font-size:16px">${(s.maxSpeed * 3.6).toFixed(1)} km/h</div>
+            <div class="details-card-label font-s">Max Speed</div>
+            <div class="details-card-value font-l">${(s.maxSpeed * 3.6).toFixed(1)} km/h</div>
           </div>
           ${
             s.avgBattery !== null
               ? `<div class="details-card" style="padding: 12px">
-                  <div class="details-card-label" style="font-size:10px">Avg Battery</div>
-                  <div class="details-card-value" style="font-size:16px">${s.avgBattery}%</div>
+                  <div class="details-card-label font-s">Avg Battery</div>
+                  <div class="details-card-value font-l">${s.avgBattery}%</div>
                 </div>`
               : ''
           }
@@ -77,28 +81,33 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
         <div class="insight-title"><span class="material-symbols-rounded">info</span>File Metadata</div>
         <div class="details-grid" style="grid-template-columns: 1fr; gap: 12px; margin-top: 4px">
           <div class="details-card" style="padding: 12px">
-            <div class="details-card-label" style="font-size:10px">Original Filename</div>
-            <div class="details-card-value" style="font-size:13px; word-break:break-all">${escHtml(track.fileName || '—')}</div>
+            <div class="details-card-label font-s">Original Filename</div>
+            <div class="details-card-value font-m" style="word-break:break-all">${escHtml(track.fileName || '—')}</div>
           </div>
           <div class="details-card" style="padding: 12px">
-            <div class="details-card-label" style="font-size:10px">File Size</div>
-            <div class="details-card-value" style="font-size:16px">${track.fileSize ? fmtFileSize(track.fileSize) : '—'}</div>
+            <div class="details-card-label font-s">File Size</div>
+            <div class="details-card-value font-l">${track.fileSize ? fmtFileSize(track.fileSize) : '—'}</div>
           </div>
           <div class="details-card" style="padding: 12px">
-            <div class="details-card-label" style="font-size:10px">Format</div>
-            <div class="details-card-value" style="font-size:16px">${track.format.toUpperCase()}</div>
+            <div class="details-card-label font-s">Format</div>
+            <div class="details-card-value font-l">${track.format.toUpperCase()}</div>
           </div>
           <div class="details-card" style="padding: 12px">
-            <div class="details-card-label" style="font-size:10px">Sport</div>
-            <div class="details-card-value" style="font-size:16px">${escHtml(track.sport || '—')} ${track.subSport ? `<span style="font-size:12px; color:var(--text-dim)">(${escHtml(track.subSport)})</span>` : ''}</div>
+            <div class="details-card-label font-s">Sport</div>
+            <div id="sport-dropdown-trigger" class="details-card-value font-l" style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+              <span class="material-symbols-rounded font-l" id="sport-icon" style="color: var(--text-dim);">${getSportIcon(track.sport)}</span>
+              <span id="sport-name">${escHtml(SPORTS[track.sport?.toLowerCase() || '']?.name || '—')}</span>
+              <span class="material-symbols-rounded font-l" style="color: var(--text-dim);">expand_more</span>
+              ${track.subSport ? `<span class="font-m" style="color:var(--text-dim)">(${escHtml(track.subSport)})</span>` : ''}
+            </div>
           </div>
           <div class="details-card" style="padding: 12px">
-            <div class="details-card-label" style="font-size:10px">Device / Creator</div>
-            <div class="details-card-value" style="font-size:16px">${track.device || 'Unknown Device'}</div>
+            <div class="details-card-label font-s">Device / Creator</div>
+            <div class="details-card-value font-l">${track.device || 'Unknown Device'}</div>
           </div>
           <div class="details-card" style="padding: 12px">
-            <div class="details-card-label" style="font-size:10px">Start Time</div>
-            <div class="details-card-value" style="font-size:16px">${t0 ? fmtDateTime(t0) : 'Unknown'}</div>
+            <div class="details-card-label font-s">Start Time</div>
+            <div class="details-card-value font-l">${t0 ? fmtDateTime(t0) : 'Unknown'}</div>
           </div>
         </div>
       </div>
@@ -107,12 +116,12 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
         <div class="insight-title"><span class="material-symbols-rounded">sensors</span>Sensor Info</div>
         <div class="details-grid" style="grid-template-columns: 1fr; gap: 12px; margin-top: 4px">
           <div class="details-card" style="padding: 12px">
-            <div class="details-card-label" style="font-size:10px">Total Points</div>
-            <div class="details-card-value" style="font-size:16px">${track.points.length.toLocaleString()} pts</div>
+            <div class="details-card-label font-s">Total Points</div>
+            <div class="details-card-value font-l">${track.points.length.toLocaleString()} pts</div>
           </div>
           <div class="details-card" style="padding: 12px">
-            <div class="details-card-label" style="font-size:10px">Sensors Found</div>
-            <div class="details-card-value" style="font-size:14px; margin-top: 4px;">
+            <div class="details-card-label font-s">Sensors Found</div>
+            <div class="details-card-value font-l" style="margin-top: 4px;">
               ${s.sensors.length ? s.sensors.join(', ') : 'GPS only'}
             </div>
           </div>
@@ -128,40 +137,40 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
           ${
             s.avgHR
               ? `<div class="details-card" style="padding: 12px">
-                  <div class="details-card-label" style="font-size:10px">Avg HR</div>
-                  <div class="details-card-value" style="font-size:16px">${s.avgHR} bpm</div>
+                  <div class="details-card-label font-s">Avg HR</div>
+                  <div class="details-card-value font-l">${s.avgHR} bpm</div>
                 </div>`
               : ''
           }
           ${
             s.maxHR
               ? `<div class="details-card" style="padding: 12px">
-                  <div class="details-card-label" style="font-size:10px">Max HR</div>
-                  <div class="details-card-value" style="font-size:16px">${s.maxHR} bpm</div>
+                  <div class="details-card-label font-s">Max HR</div>
+                  <div class="details-card-value font-l">${s.maxHR} bpm</div>
                 </div>`
               : ''
           }
           ${
             s.avgPower
               ? `<div class="details-card" style="padding: 12px">
-                  <div class="details-card-label" style="font-size:10px">Avg Power</div>
-                  <div class="details-card-value" style="font-size:16px">${s.avgPower} W</div>
+                  <div class="details-card-label font-s">Avg Power</div>
+                  <div class="details-card-value font-l">${s.avgPower} W</div>
                 </div>`
               : ''
           }
           ${
             s.maxPower
               ? `<div class="details-card" style="padding: 12px">
-                  <div class="details-card-label" style="font-size:10px">Max Power</div>
-                  <div class="details-card-value" style="font-size:16px">${s.maxPower} W</div>
+                  <div class="details-card-label font-s">Max Power</div>
+                  <div class="details-card-value font-l">${s.maxPower} W</div>
                 </div>`
               : ''
           }
           ${
             s.avgCadence
               ? `<div class="details-card" style="padding: 12px">
-                  <div class="details-card-label" style="font-size:10px">Avg Cadence</div>
-                  <div class="details-card-value" style="font-size:16px">${s.avgCadence} rpm</div>
+                  <div class="details-card-label font-s">Avg Cadence</div>
+                  <div class="details-card-value font-l">${s.avgCadence} rpm</div>
                 </div>`
               : ''
           }
@@ -177,8 +186,8 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
         <div class="insight-title"><span class="material-symbols-rounded">settings</span>Drivetrain</div>
         <div class="details-grid" style="grid-template-columns: 1fr; gap: 12px; margin-top: 4px">
           <div class="details-card" style="padding: 12px">
-            <div class="details-card-label" style="font-size:10px">Total Shifts</div>
-            <div class="details-card-value" style="font-size:16px">${s.shifts}</div>
+            <div class="details-card-label font-s">Total Shifts</div>
+            <div class="details-card-value font-l">${s.shifts}</div>
           </div>
         </div>
       </div>`
@@ -230,35 +239,35 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
 
                 let deviceIcon = 'sensors';
                 const nameLower = name.toLowerCase();
-                if (nameLower.includes('heartrate') || nameLower.includes('hrm')) deviceIcon = 'favorite';
-                else if (nameLower.includes('power')) deviceIcon = 'bolt';
-                else if (nameLower.includes('speed')) deviceIcon = 'speed';
-                else if (nameLower.includes('cadence')) deviceIcon = 'directions_bike';
+                if (nameLower.includes('heartrate') || nameLower.includes('hrm')) deviceIcon = Metrics.hr.icon;
+                else if (nameLower.includes('power')) deviceIcon = Metrics.power.icon;
+                else if (nameLower.includes('speed')) deviceIcon = Metrics.speed.icon;
+                else if (nameLower.includes('cadence')) deviceIcon = Metrics.cadence.icon;
                 else if (nameLower.includes('barometer')) deviceIcon = 'air';
-                else if (nameLower.includes('temperature')) deviceIcon = 'device_thermostat';
+                else if (nameLower.includes('temperature')) deviceIcon = Metrics.temperature.icon;
                 else if (nameLower.includes('gps')) deviceIcon = 'location_on';
 
                 return `
                 <div class="details-card" style="padding: 10px">
                   <div style="display:flex; justify-content:space-between; align-items:baseline">
                     <div style="display:flex; align-items:center; gap:6px">
-                      <span class="material-symbols-rounded" style="font-size:16px; color:var(--text-dim)">${deviceIcon}</span>
-                      <div style="font-size:13px; font-weight:700; color:var(--text)">${escHtml(name)}</div>
-                      ${sourceIcon ? `<span class="material-symbols-rounded" style="font-size:14px; color:var(--text-dim)" title="${d.sourceType}">${sourceIcon}</span>` : ''}
+                      <span class="material-symbols-rounded font-l" style="color:var(--text-dim)">${deviceIcon}</span>
+                      <div class="font-m" style="font-weight:700; color:var(--text)">${escHtml(name)}</div>
+                      ${sourceIcon ? `<span class="material-symbols-rounded font-l" style="color:var(--text-dim)" title="${d.sourceType}">${sourceIcon}</span>` : ''}
                     </div>
-                    <div style="font-size:10px; font-weight:600">${manufacturer}</div>
+                    <div class="font-s" style="font-weight:600">${manufacturer}</div>
                   </div>
                   ${
                     extra
-                      ? `<div style="font-size:10px; color:var(--text-dim); margin-top:2px">${escHtml(extra)}</div>`
+                      ? `<div class="font-s" style="color:var(--text-dim); margin-top:2px">${escHtml(extra)}</div>`
                       : ''
                   }
                   <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px">
-                    <div style="font-size:9px; color:var(--accent); font-weight:800; text-transform:uppercase; letter-spacing:0.5px">${escHtml(d.type || 'device')}</div>
+                    <div class="font-s" style="color:var(--accent); font-weight:800; text-transform:uppercase; letter-spacing:0.5px">${escHtml(d.type || 'device')}</div>
                     ${
                       battery
-                        ? `<div style="font-size:10px; color:var(--text-muted); display:flex; align-items:center; gap:4px">
-                            <span class="material-symbols-rounded" style="font-size:12px">battery_charging_full</span>
+                        ? `<div class="font-s" style="color:var(--text-muted); display:flex; align-items:center; gap:4px">
+                            <span class="material-symbols-rounded font-m">battery_charging_full</span>
                             ${escHtml(battery)}
                            </div>`
                         : ''
@@ -273,6 +282,14 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
       </div>`
           : ''
       }
+      <div class="insight-card" style="border: 1px solid var(--border)">
+        <div class="insight-title" style="color: var(--danger)"><span class="material-symbols-rounded">delete</span>Danger Zone</div>
+        <div style="margin-top: 8px">
+          <button id="btn-delete-track" style="display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; background: var(--danger); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
+            <span class="material-symbols-rounded font-l">delete</span>Delete Track
+          </button>
+        </div>
+      </div>
     </div>
   `;
 
@@ -284,20 +301,19 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
     tagContainer.innerHTML = '';
     const tags = track.tags || [];
     if (tags.length === 0) {
-      tagContainer.innerHTML = '<span style="color:var(--text-dim); font-size:11px; font-style:italic">No tags added</span>';
+      tagContainer.innerHTML = '<span class="font-m" style="color:var(--text-dim); font-style:italic">No tags added</span>';
       return;
     }
     tags.forEach((tag) => {
       const c = getTagColor(tag);
       const el = document.createElement('div');
-      el.className = 'tag-pill';
+      el.className = 'tag-pill font-s';
       el.style.cssText = `
         background: ${c}15;
         border: 1px solid ${c}44;
         color: ${c};
         padding: 2px 8px;
         border-radius: 4px;
-        font-size: 11px;
         font-weight: 600;
         display: flex;
         align-items: center;
@@ -305,7 +321,7 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
       `;
       el.innerHTML = `
         <span>${escHtml(tag)}</span>
-        <span class="material-symbols-rounded btn-remove-tag" data-tag="${tag}" style="font-size:14px; cursor:pointer; color:${c}aa">close</span>
+        <span class="material-symbols-rounded btn-remove-tag font-l" data-tag="${tag}" style="cursor:pointer; color:${c}aa">close</span>
       `;
       tagContainer.appendChild(el);
     });
@@ -342,5 +358,92 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
     if (e.key === 'Enter') addTag();
   });
 
+  const titleInput = container.querySelector('#details-title-input') as HTMLInputElement;
+  titleInput?.addEventListener('change', async () => {
+    const val = titleInput.value.trim();
+    if (!val) return;
+    track.displayName = val;
+    await Storage.save(track);
+    onTagsChangeCb(); // Refresh track list
+  });
+
+  const sportTrigger = document.getElementById('sport-dropdown-trigger');
+  sportTrigger?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showSportMenu(sportTrigger);
+  });
+
+  function showSportMenu(anchorEl: HTMLElement) {
+    if (!track) return;
+    document.querySelectorAll('.metric-menu-popup').forEach((el) => el.remove());
+
+    const popup = document.createElement('div');
+    popup.className = 'metric-menu-popup';
+
+    Object.keys(SPORTS).forEach((key) => {
+      const def = SPORTS[key];
+      const item = document.createElement('div');
+      const isActive = track.sport?.toLowerCase() === key;
+      item.className = `menu-item ${isActive ? 'active' : ''}`;
+      item.innerHTML = `
+        <span class="material-symbols-rounded">${def.icon}</span>
+        <span class="item-label">${def.name}</span>
+        <span class="material-symbols-rounded check">${isActive ? 'check' : ''}</span>
+      `;
+      item.addEventListener('click', async () => {
+        track.sport = key;
+        await Storage.save(track);
+        popup.remove();
+        const iconEl = document.getElementById('sport-icon');
+        if (iconEl) iconEl.textContent = def.icon;
+        const nameEl = document.getElementById('sport-name');
+        if (nameEl) nameEl.textContent = def.name;
+        onTagsChangeCb();
+      });
+      popup.appendChild(item);
+    });
+
+    const clearItem = document.createElement('div');
+    const isClear = !track.sport;
+    clearItem.className = `menu-item ${isClear ? 'active' : ''}`;
+    clearItem.innerHTML = `
+      <span class="material-symbols-rounded">block</span>
+      <span class="item-label">—</span>
+      <span class="material-symbols-rounded check">${isClear ? 'check' : ''}</span>
+    `;
+    clearItem.addEventListener('click', async () => {
+      track.sport = undefined;
+      await Storage.save(track);
+      popup.remove();
+      const iconEl = document.getElementById('sport-icon');
+      if (iconEl) iconEl.textContent = 'question_mark';
+      const nameEl = document.getElementById('sport-name');
+      if (nameEl) nameEl.textContent = '—';
+      onTagsChangeCb();
+    });
+    popup.appendChild(clearItem);
+
+    document.body.appendChild(popup);
+
+    const rect = anchorEl.getBoundingClientRect();
+    popup.style.top = `${rect.bottom + window.scrollY + 4}px`;
+    popup.style.left = `${rect.left + window.scrollX}px`;
+
+    const closeHandler = (e: MouseEvent) => {
+      if (!popup.contains(e.target as Node) && !anchorEl.contains(e.target as Node)) {
+        popup.remove();
+        document.removeEventListener('click', closeHandler);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', closeHandler), 10);
+  }
+
   renderTags();
+
+  const deleteBtn = document.getElementById('btn-delete-track');
+  deleteBtn?.addEventListener('click', () => {
+    if (confirm(`Remove "${track.name}"?`)) {
+      onDeleteTrackCb(track.id);
+    }
+  });
 }

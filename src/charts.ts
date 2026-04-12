@@ -8,6 +8,7 @@ import uPlot from 'uplot';
 import { TrackPoint, TrackStats, TrackData } from './parsers';
 import { gaussianSmooth, fmtSecs, hexToRgba } from './utils';
 import { Zones } from './zones.ts';
+import { METRICS, MetricDefinition } from './metrics';
 
 // Augment uPlot to include our custom property
 interface WegPlot extends uPlot {
@@ -26,21 +27,7 @@ interface WegPlot extends uPlot {
   };
 }
 
-export interface MetricDefinition {
-  label: string;
-  field: keyof TrackPoint;
-  unit: string;
-  color: string;
-  abbr: string;
-  icon: string;
-  fmt: (v: number, precise?: boolean) => string;
-  fmtAxis: (v: number) => string;
-  compute?: (
-    pts: TrackPoint[],
-    fillNulls: (data: (number | null)[]) => (number | null)[],
-  ) => (number | null)[];
-  transform?: (v: number) => number;
-}
+
 
 interface PlotData {
   uplot: WegPlot;
@@ -127,119 +114,7 @@ export const ChartView = (() => {
   let onMapColorChangeCb: ((data: { pts: TrackPoint[]; colors: string[] } | null) => void) | null =
     null;
 
-  const METRICS: Record<string, MetricDefinition> = {
-    elevation: {
-      label: 'Elevation',
-      field: 'ele',
-      unit: 'm',
-      color: '#4ECDC4',
-      abbr: 'ele',
-      icon: 'height',
-      fmt: (v, p) => (p ? v.toFixed(1) : Math.round(v).toString()),
-      fmtAxis: (v) => Math.round(v).toString(),
-    },
-    speed: {
-      label: 'Speed',
-      field: 'speed',
-      unit: 'km/h',
-      color: '#45B7D1',
-      abbr: 'spd',
-      icon: 'speed',
-      fmt: (v) => (v * 3.6).toFixed(1),
-      fmtAxis: (v) => (v * 3.6).toFixed(0),
-      transform: (v) => v, // already m/s
-    },
-    gradient: {
-      label: 'Gradient',
-      field: 'gradient',
-      unit: '%',
-      color: '#A8C8A0',
-      abbr: 'grad',
-      icon: 'trending_up',
-      fmt: (v) => v.toFixed(1),
-      fmtAxis: (v) => v.toFixed(0),
-    },
-    power: {
-      label: 'Power',
-      field: 'power',
-      unit: 'W',
-      color: '#F7DC6F',
-      abbr: 'pwr',
-      icon: 'bolt',
-      fmt: (v) => Math.round(v).toString(),
-      fmtAxis: (v) => Math.round(v).toString(),
-    },
-    hr: {
-      label: 'Heart Rate',
-      field: 'hr',
-      unit: 'bpm',
-      color: '#FF6B6B',
-      abbr: 'hr',
-      icon: 'favorite',
-      fmt: (v) => Math.round(v).toString(),
-      fmtAxis: (v) => Math.round(v).toString(),
-    },
-    cadence: {
-      label: 'Cadence',
-      field: 'cad',
-      unit: 'rpm',
-      color: '#BB8FCE',
-      abbr: 'cad',
-      icon: 'directions_run',
-      fmt: (v) => Math.round(v).toString(),
-      fmtAxis: (v) => Math.round(v).toString(),
-    },
-    temperature: {
-      label: 'Temp',
-      field: 'temp',
-      unit: '°C',
-      color: '#F8C471',
-      abbr: 'temp',
-      icon: 'thermostat',
-      fmt: (v) => v.toFixed(1),
-      fmtAxis: (v) => Math.round(v).toString(),
-    },
-    gearRear: {
-      label: 'Rear Gear',
-      field: 'gearRearTooth',
-      unit: 'T',
-      color: '#82E0AA',
-      abbr: 'rgr',
-      icon: 'settings',
-      fmt: (v) => Math.round(v).toString(),
-      fmtAxis: (v) => Math.round(v).toString(),
-    },
-    gearFront: {
-      label: 'Front Gear',
-      field: 'gearFrontTooth',
-      unit: 'T',
-      color: '#A8C8A0',
-      abbr: 'fgr',
-      icon: 'settings_input_component',
-      fmt: (v) => Math.round(v).toString(),
-      fmtAxis: (v) => Math.round(v).toString(),
-    },
-    gears: {
-      label: 'Gears',
-      field: 'gears',
-      unit: '',
-      color: '#FF8C00',
-      abbr: 'gr',
-      icon: 'settings',
-      fmt: (v) => v.toFixed(2),
-      fmtAxis: (v) => v.toFixed(1),
-    },
-    battery: {
-      label: 'Battery',
-      field: 'battery',
-      unit: '%',
-      color: '#45B7D1',
-      abbr: 'bat',
-      icon: 'battery_full',
-      fmt: (v) => Math.round(v).toString(),
-      fmtAxis: (v) => Math.round(v).toString(),
-    },
-  };
+
 
   // ── Init ──────────────────────────────────────────────────────
   function init(
@@ -710,7 +585,6 @@ export const ChartView = (() => {
         100,
         containerW - ROW_BODY_PADDING - (statsVisible ? HIST_W + HIST_GAP : 0),
       );
-      console.log(`ChartView: Rendering charts with width=${w} (container=${containerW})`);
       available.forEach((key) => {
         const def = METRICS[key];
         let yData = def.compute
@@ -844,7 +718,14 @@ export const ChartView = (() => {
     rowBody.className = 'chart-row-body';
 
     const plotEl = document.createElement('div');
+    plotEl.style.position = 'relative';
     rowBody.appendChild(plotEl);
+
+    const fixedMinLabel = document.createElement('div');
+    fixedMinLabel.className = 'fixed-x-label fixed-x-min';
+    const fixedMaxLabel = document.createElement('div');
+    fixedMaxLabel.className = 'fixed-x-label fixed-x-max';
+    plotEl.append(fixedMinLabel, fixedMaxLabel);
 
     const histCol = document.createElement('div');
     histCol.className = 'hist-col' + (statsVisible ? ' visible' : '');
@@ -858,6 +739,23 @@ export const ChartView = (() => {
 
     const isDistAxis = xAxis === 'distance';
 
+    function formatX(v: number, range: number): string {
+      if (v == null) return '';
+      if (isDistAxis) {
+        const dec = range < 1 ? 3 : range < 5 ? 2 : range < 20 ? 1 : 0;
+        return `${v.toFixed(dec)} km`;
+      } else {
+        const absV = Math.abs(v);
+        const h = Math.floor(absV / 3600);
+        const m = Math.floor((absV % 3600) / 60);
+        const s = Math.round(absV % 60);
+        const hh = h > 0 ? `${h}:` : '';
+        const mm = h > 0 ? String(m).padStart(2, '0') : String(m);
+        const ss = String(s).padStart(2, '0');
+        return `${v < 0 ? '-' : ''}${hh}${mm}:${ss}`;
+      }
+    }
+
     // Compute global Y range once to keep axis stable during zoom/pan
     const yVals = yData.filter((v): v is number => v != null && isFinite(v));
     const gMin = yVals.length ? Math.min(...yVals) : 0;
@@ -866,24 +764,29 @@ export const ChartView = (() => {
     const fixedYRange = [gMin - gPad, gMax + gPad];
 
     // Per-range stats
-    function updateHeaderStats(visibleMin: number, visibleMax: number) {
+    function updateHeaderStats(visibleMin: number, visibleMax: number, u?: uPlot) {
       const incZero = metricsIncludingZero.has(metricKey) || (metricKey !== 'power' && metricKey !== 'cadence' && metricKey !== 'speed');
+
+      // Update fixed X labels
+      const range = visibleMax - visibleMin;
+      fixedMinLabel.textContent = formatX(visibleMin, range);
+      fixedMaxLabel.textContent = formatX(visibleMax, range);
 
       const getHtml = (xMin: number, xMax: number, _isSel = false) => {
         const s = rangeStats(xData, yData, xMin, xMax, incZero);
         if (!s) return '';
 
         let h = `
-          <span class="mm-item"><span class="material-symbols-rounded mm-icon">arrow_downward</span><span class="mm-l">min</span>${def.fmt(s.min, true)}&nbsp;${def.unit}</span>
-          <span class="mm-item"><span class="material-symbols-rounded mm-icon">horizontal_rule</span><span class="mm-l">avg</span>${def.fmt(s.avg, true)}&nbsp;${def.unit}</span>
-          <span class="mm-item"><span class="material-symbols-rounded mm-icon">arrow_upward</span><span class="mm-l">max</span>${def.fmt(s.max, true)}&nbsp;${def.unit}</span>
+          <span class="mm-item" title="Min"><span class="material-symbols-rounded mm-icon">align_flex_end</span>${def.fmt(s.min, true)}&nbsp;${def.unit}</span>
+          <span class="mm-item" title="Avg"><span class="material-symbols-rounded mm-icon">align_center</span>${def.fmt(s.avg, true)}&nbsp;${def.unit}</span>
+          <span class="mm-item" title="Max"><span class="material-symbols-rounded mm-icon">align_flex_start</span>${def.fmt(s.max, true)}&nbsp;${def.unit}</span>
         `;
 
         if (metricKey === 'elevation') {
           const es = elevationRangeStats(pts, xMin, xMax);
           h += `
-            <span class="mm-item"><span class="material-symbols-rounded mm-icon">trending_up</span><span class="mm-l">gain</span>+${Math.round(es.gain)}&nbsp;m</span>
-            <span class="mm-item"><span class="material-symbols-rounded mm-icon">trending_down</span><span class="mm-l">loss</span>-${Math.round(es.loss)}&nbsp;m</span>
+            <span class="mm-item" title="Gain"><span class="material-symbols-rounded mm-icon">trending_up</span>+${Math.round(es.gain)}&nbsp;m</span>
+            <span class="mm-item" title="Loss"><span class="material-symbols-rounded mm-icon">trending_down</span>-${Math.round(es.loss)}&nbsp;m</span>
           `;
         }
         return h;
@@ -898,10 +801,9 @@ export const ChartView = (() => {
       });
 
       if (selAnchorVal !== null && selEndVal !== null) {
-        statsSelEl.innerHTML =
-          `<span class="sel-tag material-symbols-rounded" title="Selected range">fit_width</span>` +
-          getHtml(selAnchorVal, selEndVal, true);
+        statsSelEl.innerHTML = getHtml(selAnchorVal, selEndVal, true);
         statsSelEl.style.display = 'flex';
+        statsSelEl.style.setProperty('--sel-color', def.color);
       } else {
         statsSelEl.style.display = 'none';
       }
@@ -946,33 +848,68 @@ export const ChartView = (() => {
           side: 2, // bottom
           stroke: '#555564',
           grid: { stroke: '#2e2e34', width: 1 },
-          ticks: { stroke: '#2e2e34' },
-          size: 30,
-          // Dynamic spacing: ensure at least 80px between labels, handling small widths safely
-          space: (self: uPlot, axisIdx: number, scaleMin: number, scaleMax: number, plotDim: number) => {
-            const minSpace = 80;
-            const maxLabels = Math.floor(plotDim / minSpace);
-            return maxLabels > 0 ? plotDim / maxLabels : minSpace;
+          ticks: {
+            show: true,
+            stroke: '#2e2e34',
           },
-          font: '10px system-ui',
-          values: (isDistAxis
-            ? (_u: uPlot, vals: number[]) => {
-                const range = (_u.scales.x?.max ?? 1) - (_u.scales.x?.min ?? 0);
-                const dec = range < 1 ? 3 : range < 5 ? 2 : range < 20 ? 1 : 0;
-                return vals.map((v) => (v != null ? `${v.toFixed(dec)} km` : ''));
+          size: 30,
+          space: 80,
+          font: '10px system-ui, sans-serif',
+          splits: (u: uPlot, axisIdx: number, scaleMin: number, scaleMax: number) => {
+            const range = scaleMax - scaleMin;
+            const width = u.bbox.width > 0 ? u.bbox.width : u.width;
+            const targetLabels = width / 80;
+            const idealIncr = range / targetLabels;
+            
+            let incrs;
+            if (!isDistAxis) {
+              // Time in seconds
+              incrs = [
+                1, 2, 5, 10, 15, 30, 
+                60, 120, 300, 600, 900, 1800, 
+                3600, 7200, 14400, 28800, 43200, 86400,
+                604800, 2592000, 31536000
+              ];
+            } else {
+              incrs = [
+                0.01, 0.02, 0.05, 0.1, 0.2, 0.25, 0.5, 
+                1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000,
+                20000, 50000, 100000, 200000, 500000, 1000000
+              ];
+            }
+            
+            let incr = incrs[incrs.length - 1];
+            for (let i = 0; i < incrs.length; i++) {
+              if (incrs[i] >= idealIncr) {
+                incr = incrs[i];
+                break;
               }
-            : (_u: uPlot, vals: number[]) =>
-                vals.map((v) => {
-                  if (v == null) return '';
-                  const absV = Math.abs(v);
-                  const h = Math.floor(absV / 3600);
-                  const m = Math.floor((absV % 3600) / 60);
-                  const s = Math.round(absV % 60);
-                  const hh = h > 0 ? `${h}:` : '';
-                  const mm = h > 0 ? String(m).padStart(2, '0') : String(m);
-                  const ss = String(s).padStart(2, '0');
-                  return `${v < 0 ? '-' : ''}${hh}${mm}:${ss}`;
-                })) as any,
+            }
+            
+            const splits = [];
+            let val = Math.ceil(scaleMin / incr) * incr;
+            const precision = incr < 1 ? 2 : 0;
+            
+            while (val <= scaleMax) {
+              const pos = u.valToPos(val, 'x', true);
+              if (pos >= u.bbox.left + 80 && pos <= u.bbox.left + u.bbox.width - 80) {
+                splits.push(Number(val.toFixed(precision)));
+              }
+              val += incr;
+            }
+            return splits;
+          },
+          values: ((_u: uPlot, vals: number[]) => {
+            const range = (_u.scales.x?.max ?? 1) - (_u.scales.x?.min ?? 0);
+            
+            return vals.map((v) => {
+              if (v == null) return '';
+              const pos = _u.valToPos(v, 'x', true);
+              // Strict 80px margin to prevent overlapping with fixed labels or Y axis
+              if (pos < _u.bbox.left + 80 || pos > _u.bbox.left + _u.bbox.width - 80) return null;
+              return formatX(v, range);
+            });
+          }) as any,
         },
         {
           side: 3, // left
@@ -980,7 +917,7 @@ export const ChartView = (() => {
           grid: { stroke: '#2e2e34', width: 1 },
           ticks: { stroke: '#2e2e34' },
           size: 55,
-          font: '10px system-ui',
+          font: '10px system-ui, sans-serif',
           values: ((_u: uPlot, vals: number[]) =>
             vals.map((v) => (v != null ? def.fmtAxis(v) : ''))) as any,
         },
@@ -998,6 +935,15 @@ export const ChartView = (() => {
       ],
       hooks: {
         draw: [
+          (u: uPlot) => {
+            const top = u.bbox.top + u.bbox.height + 5; // 5px below plot area!
+            fixedMinLabel.style.top = `${top}px`;
+            fixedMinLabel.style.left = `${u.bbox.left}px`;
+            
+            fixedMaxLabel.style.top = `${top}px`;
+            fixedMaxLabel.style.left = `${u.bbox.left + u.bbox.width}px`;
+            fixedMaxLabel.style.transform = 'translateX(-100%)';
+          },
           // 1. (bottom) Color / metric color of the selected track
           (u: uPlot) => {
             if (metricKey === 'gears') {
@@ -1205,7 +1151,7 @@ export const ChartView = (() => {
             }
 
             // Update header stats for VISIBLE range
-            updateHeaderStats(min as number, max as number);
+            updateHeaderStats(min as number, max as number, u);
 
             updateSelOverlay();
             redrawHistograms();
@@ -1228,7 +1174,7 @@ export const ChartView = (() => {
               selEndVal = max;
 
               // Sync stats to new selection
-              updateHeaderStats(u.scales.x!.min!, u.scales.x!.max!);
+              updateHeaderStats(u.scales.x!.min!, u.scales.x!.max!, u);
               updateSelOverlay();
               redrawHistograms();
 
@@ -1278,7 +1224,7 @@ export const ChartView = (() => {
     const anchorMarker = document.createElement('div');
     anchorMarker.className = 'sel-graph-marker';
     anchorMarker.innerHTML =
-      '<span class="material-symbols-rounded" style="font-size:16px; font-variation-settings:\'FILL\' 1">play_circle</span>';
+      '<span class="material-symbols-rounded font-l" style="font-variation-settings:\'FILL\' 1">play_circle</span>';
     anchorMarker.style.display = 'none';
 
     // End line + label + drag handle
@@ -1297,7 +1243,7 @@ export const ChartView = (() => {
     const endMarker = document.createElement('div');
     endMarker.className = 'sel-graph-marker';
     endMarker.innerHTML =
-      '<span class="material-symbols-rounded" style="font-size:16px; font-variation-settings:\'FILL\' 1">stop_circle</span>';
+      '<span class="material-symbols-rounded font-l" style="font-variation-settings:\'FILL\' 1">stop_circle</span>';
     endMarker.style.display = 'none';
 
     // Floating cursor y-value
@@ -1978,7 +1924,7 @@ export const ChartView = (() => {
       if (z) {
         const finalZIdx = zIdx !== -1 ? zIdx : zones.length - 1;
         zoneHtml = `
-          <div style="display:flex; align-items:center; gap:8px; margin-top:2px; margin-bottom:8px; padding-left:8px; border-left:3px solid ${z.color}; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px">
+          <div class="font-s" style="display:flex; align-items:center; gap:8px; margin-top:2px; margin-bottom:8px; padding-left:8px; border-left:3px solid ${z.color}; font-weight:700; text-transform:uppercase; letter-spacing:0.5px">
             <span style="color:var(--text)">Z${finalZIdx + 1}</span>
             <span style="color:var(--text-dim)">·</span>
             <span style="color:var(--text-muted)">${z.name}</span>
@@ -2143,20 +2089,20 @@ export const ChartView = (() => {
     let content =
       metricKey !== 'elevation'
         ? `${def.fmt(yData[idx]!, false)}&nbsp;${def.unit}`
-        : `${def.fmt(yData[idx]!, false)}&nbsp;${def.unit} <span style="color:${gColor};margin-left:6px;font-size:12px">∠</span> ${Math.abs(g).toFixed(1)}%`;
+        : `${def.fmt(yData[idx]!, false)}&nbsp;${def.unit} <span class="font-m" style="color:${gColor};margin-left:6px">∠</span> ${Math.abs(g).toFixed(1)}%`;
 
     // Special handling for gears: show tooth count if available
     if (metricKey === 'gearRear' && pts[idx].gearRearTooth != null) {
-      content = `${pts[idx].gearRearTooth}T <span style="font-size:10px; opacity:0.6; margin-left:4px">(pos ${yData[idx]})</span>`;
+      content = `${pts[idx].gearRearTooth}T <span class="font-s" style="opacity:0.6; margin-left:4px">(pos ${yData[idx]})</span>`;
     } else if (metricKey === 'gearFront' && pts[idx].gearFrontTooth != null) {
-      content = `${pts[idx].gearFrontTooth}T <span style="font-size:10px; opacity:0.6; margin-left:4px">(pos ${yData[idx]})</span>`;
+      content = `${pts[idx].gearFrontTooth}T <span class="font-s" style="opacity:0.6; margin-left:4px">(pos ${yData[idx]})</span>`;
     } else if (metricKey === 'gears') {
       const p = pts[idx];
       const front = p.gearFrontTooth != null ? `${p.gearFrontTooth}T` : (p.gearFront != null ? `pos ${p.gearFront}` : '');
       const rear = p.gearRearTooth != null ? `${p.gearRearTooth}T` : (p.gearRear != null ? `pos ${p.gearRear}` : '');
       
       if (front || rear) {
-        content += ` <span style="font-size:10px; opacity:0.6; margin-left:4px">(${front} / ${rear})</span>`;
+        content += ` <span class="font-s" style="opacity:0.6; margin-left:4px">(${front} / ${rear})</span>`;
       }
     }
 

@@ -7,13 +7,14 @@
 // ── Main Application ──────────────────────────────────────────────
 
 import { Storage } from './storage';
-import { UrlState } from './url-state';
-import { Parsers, TrackData, TrackPoint } from './parsers';
+import { UrlState, AppState } from './url-state';
+import { Parsers, TrackData, TrackPoint, calculateBounds, simplifyTrack } from './parsers';
 import { MapView } from './map';
 import { ChartView } from './charts';
 import { renderDetails, initDetails } from './tabs/details';
 import { renderInsights, initInsights } from './tabs/insights';
 import { renderCombined, initCombined, resizeCombined } from './tabs/combined';
+import { renderEvolution } from './tabs/progress';
 import { fmtSecs, escHtml, fmtDate, getTagColor, compactId, shortRandom } from './utils';
 
 const TRACK_COLORS: string[] = [
@@ -31,6 +32,16 @@ const TRACK_COLORS: string[] = [
 const POINT_ZOOM_LEVEL = 16;
 
 let tracks: Record<string, TrackData> = {};
+let skippedImports: { name: string; reason: string }[] = [];
+
+function isSameDay(t1: number, t2: number) {
+  const d1 = new Date(t1);
+  const d2 = new Date(t2);
+  return d1.getFullYear() === d2.getFullYear() &&
+         d1.getMonth() === d2.getMonth() &&
+         d1.getDate() === d2.getDate();
+}
+
 let cancelProcessing = false;
 let selectedId: string | null = null;
 let colorIdx = 0;
@@ -60,14 +71,14 @@ let filters: Filters = {
   sport: null,
 };
 
-function syncFiltersToUrl() {
+function syncFiltersToUrl(push: boolean = false) {
   UrlState.patch({
     f_date: filters.date.every((v) => v === null) ? null : filters.date,
     f_dist: filters.dist.every((v) => v === null) ? null : filters.dist,
     f_dur: filters.dur.every((v) => v === null) ? null : filters.dur,
     f_mets: filters.metrics.size === 0 ? null : Array.from(filters.metrics),
     f_tags: filters.tags.length === 0 ? null : filters.tags,
-  });
+  }, push);
 }
 
 function syncMetricsToUrl() {
@@ -176,6 +187,46 @@ function showMetricMenu(anchorEl: HTMLElement) {
 }
 
 // ── Tab Management ────────────────────────────────────────────────
+document.addEventListener('select-track', (e: any) => {
+  const id = e.detail.id;
+  const idx = e.detail.idx;
+  const dur = e.detail.dur;
+  if (id && tracks[id]) {
+    selectTrack(id);
+    if (idx != null && dur != null) {
+      const t = tracks[id];
+      const pts = t.points;
+      if (idx >= 0 && idx < pts.length) {
+        const pIdx = pts[idx];
+        if (pIdx && pIdx.time != null) {
+          const t0 = pts.find(p => p.time != null)?.time || 0;
+          const tMin = (pIdx.time - t0) / 1000;
+          const tMax = tMin + dur;
+          
+          // ChartView selection
+          ChartView.restoreSelection(tMin, tMax);
+          
+          // Find iMax based on duration
+          let iMax = pts.findIndex(p => (p.time || 0) >= pIdx.time! + dur * 1000);
+          if (iMax === -1) iMax = pts.length - 1;
+          
+          const selPts = pts.slice(idx, iMax + 1);
+          const stats = Parsers.computeStats(selPts);
+          ChartView.setSelectionStats(stats);
+          
+          renderInsights(t);
+          
+          MapView.highlightSegment(id, pts, idx, iMax, false, currentMapColors);
+          MapView.ensureVisible(selPts.map(p => [p.lat, p.lon] as [number, number]));
+          
+          // Update URL state
+          UrlState.patch({ sel: [tMin, tMax] });
+        }
+      }
+    }
+  }
+});
+
 document.addEventListener('click', (e) => {
   const btn = (e.target as HTMLElement).closest('.tab-btn') as HTMLElement;
   if (!btn) return;
@@ -186,7 +237,7 @@ document.addEventListener('click', (e) => {
   nav.querySelectorAll('.tab-btn').forEach((b) => b.classList.toggle('active', b === btn));
 
   const tab = btn.dataset.tab!;
-  UrlState.patch({ tab });
+  UrlState.patch({ tab }, true);
 
   // Toggle contents
   const panel = nav.closest('#chart-panel');
@@ -202,6 +253,21 @@ document.addEventListener('click', (e) => {
 
   if (btn.dataset.tab === 'insights' && selectedId && tracks[selectedId]) {
     renderInsights(tracks[selectedId]);
+  }
+
+  if (btn.dataset.tab === 'evolution') {
+    renderEvolution(selectedId ? tracks[selectedId] : null, Object.values(tracks), (trackId, range) => {
+      selectTrack(trackId, true);
+      if (range) {
+        ChartView.restoreSelection(range[0], range[1]);
+        onChartRangeChange(range[0], range[1], 'time', true);
+      }
+    }, (start, end) => {
+      filters.date = [start, end];
+      applyFilters();
+      syncFiltersToUrl(true);
+      updateFilterUI();
+    });
   }
 
   if (btn.dataset.tab === 'combined' && selectedId && tracks[selectedId]) {
@@ -222,6 +288,11 @@ document.addEventListener('click', (e) => {
 
 // ── Boot ──────────────────────────────────────────────────────────
 async function init() {
+  // Wait for fonts to be loaded with a timeout
+  const fontTimeout = new Promise((resolve) => setTimeout(resolve, 1000));
+  await Promise.race([document.fonts.ready, fontTimeout]);
+  document.body.classList.remove('loading-fonts');
+
   const loader = document.getElementById('global-loader');
   const loaderText = document.getElementById('loader-text');
   const loaderSubtext = document.getElementById('loader-subtext');
@@ -237,10 +308,15 @@ async function init() {
   const urlState = UrlState.get();
 
   initInsights((msg: string, type?: string) => showToast(msg, type === 'error' ? 'error' : 'info'));
-  initDetails(() => {
-    applyFilters();
-    syncFiltersToUrl();
-  });
+  initDetails(
+    () => {
+      applyFilters();
+      syncFiltersToUrl();
+    },
+    (id: string) => {
+      deleteTrack(id);
+    }
+  );
   initCombined();
 
   // Init sub-systems
@@ -277,63 +353,7 @@ async function init() {
     }
   });
 
-  // Restore basemap
-  if (urlState.map && typeof urlState.map === 'string') {
-    MapView.switchBasemap(urlState.map);
-    document
-      .querySelectorAll('.bm-btn')
-      .forEach((b) =>
-        b.classList.toggle('active', (b as HTMLElement).dataset.layer === urlState.map),
-      );
-  }
-
-  // Restore map position (before fitAll so it doesn't get overridden)
-  if (urlState.map_pos) {
-    const [lat, lng, zoom] = urlState.map_pos;
-    MapView.setPosition(lat, lng, zoom);
-  }
-
-  // Restore tab
-  if (urlState.tab) {
-    document.querySelectorAll('.tab-btn').forEach((btn) => {
-      const b = btn as HTMLElement;
-      if (b.dataset.tab === urlState.tab) {
-        b.click();
-      }
-    });
-  }
-
-  // Restore x-axis mode
-  if (urlState.xaxis) {
-    ChartView.setXAxis(urlState.xaxis);
-  }
-  const currentXAxis = urlState.xaxis || 'time';
-  document
-    .querySelectorAll('#x-axis-ctrl .seg-btn')
-    .forEach((b) => b.classList.toggle('active', (b as HTMLElement).dataset.axis === currentXAxis));
-
-  // Restore active metrics
-  if (urlState.metrics) {
-    const metrics = ChartView.METRICS;
-    const keys = urlState.metrics
-      .map((abbr) => Object.keys(metrics).find((k) => metrics[k].abbr === abbr))
-      .filter((k): k is string => k !== undefined);
-    if (keys.length) ChartView.setActiveMetrics(keys);
-  }
-
-  // Restore filters
-  if (urlState.f_date) filters.date = urlState.f_date.map((v) => v || null) as [string | null, string | null];
-  if (urlState.f_dist) filters.dist = urlState.f_dist.map((v) => (v === 0 ? 0 : v || null)) as [number | null, number | null];
-  if (urlState.f_dur) filters.dur = urlState.f_dur.map((v) => (v === 0 ? 0 : v || null)) as [number | null, number | null];
-  if (urlState.f_mets) filters.metrics = new Set(urlState.f_mets);
-  if (urlState.f_tags) filters.tags = urlState.f_tags;
-
-  updateFilterUI();
-
-  if (urlState.q) searchQuery = urlState.q;
-  if (urlState.re) searchRegex = urlState.re;
-  if (urlState.sort) currentSort = urlState.sort;
-  updateSearchSortUI();
+  applyState(urlState);
 
   // Load persisted tracks
   try {
@@ -349,9 +369,27 @@ async function init() {
 
     if (mapLoaderSpan) mapLoaderSpan.textContent = `Preparing ${saved.length} tracks...`;
 
-    saved.forEach(t => {
+    const tracksToLoad: TrackData[] = [];
+    for (const t of saved) {
+      let updated = false;
+      if (!t.bounds && t.points.length > 0) {
+        const b = calculateBounds(t.points);
+        if (b) {
+          t.bounds = b;
+          updated = true;
+        }
+      }
+      if (!t.simplifiedPoints && t.points.length > 0) {
+        t.simplifiedPoints = simplifyTrack(t.points, 50);
+        updated = true;
+      }
+      if (updated) {
+        await Storage.save(t);
+      }
       tracks[t.id] = t;
-    });
+      tracksToLoad.push(t);
+    }
+    MapView.addTracks(tracksToLoad);
     applyFilters();
 
     const restoreId = urlState.track && saved.find(t => t.id === urlState.track) 
@@ -409,6 +447,15 @@ async function init() {
         } else {
           if (mapLoader) mapLoader.classList.add('hidden');
           applyFilters(); // Final sync
+          if (selectedId && tracks[selectedId]) {
+            renderEvolution(tracks[selectedId], Object.values(tracks), (trackId, range) => {
+              selectTrack(trackId, true);
+              if (range) {
+                ChartView.restoreSelection(range[0], range[1]);
+                onChartRangeChange(range[0], range[1], 'time', true);
+              }
+            });
+          }
           // Only fit all if no saved map position and we just finished loading everything
           if (saved.length && !urlState.map_pos) MapView.fitAll();
         }
@@ -482,7 +529,13 @@ async function init() {
 
   document.getElementById('metric-pills')?.addEventListener('click', (e) => {
     const pill = (e.target as HTMLElement).closest('.metric-pill') as HTMLElement;
-    if (pill) toggleMetric(pill.dataset.metric!, pill);
+    if (pill) {
+      const metric = pill.dataset.metric;
+      if (metric) {
+        const targetEl = document.querySelector(`.chart-row[data-metric="${metric}"]`);
+        targetEl?.scrollIntoView({ behavior: 'smooth' });
+      }
+    }
   });
 
   // X-axis toggle
@@ -637,6 +690,12 @@ async function init() {
     MapView.invalidateSize?.();
     updateToolbarLayout();
   });
+
+  // Handle back/forward navigation
+  window.addEventListener('popstate', () => {
+    UrlState.refresh();
+    applyState(UrlState.get());
+  });
 }
 
 async function processAndLoadTrack(t: TrackData) {
@@ -751,7 +810,7 @@ function onChartCursorMove(pt: TrackPoint | null) {
   }
 }
 
-function onChartRangeChange(min: number | null, max: number | null, axis: string) {
+function onChartRangeChange(min: number | null, max: number | null, axis: string, fit = false) {
   if (!selectedId || !tracks[selectedId]) return;
   const t = tracks[selectedId];
 
@@ -786,7 +845,7 @@ function onChartRangeChange(min: number | null, max: number | null, axis: string
   ChartView.setSelectionStats(stats);
   renderInsights(t);
 
-  MapView.highlightSegment(selectedId, pts, iMin, iMax, false, currentMapColors);
+  MapView.highlightSegment(selectedId, pts, iMin, iMax, fit, currentMapColors);
   MapView.ensureVisible(selPts.map(p => [p.lat, p.lon] as [number, number]));
   UrlState.patch({ sel: [min, max] });
 }
@@ -817,18 +876,26 @@ function selectTrack(id: string, fit = true) {
   ChartView.toggleMapColor(null); // Ensure ChartView state also resets
 
   // Clear selection on new track
-  UrlState.patch({ track: id, sel: null });
+  UrlState.patch({ track: id, sel: null }, true);
   ChartView.cancelSelection();
 
   // Update UI immediately
   renderTrackList();
 
   // Render details
-  const activeTabBtn = document.querySelector('.tab-btn.active') as HTMLElement;
-  const activeTab = activeTabBtn ? activeTabBtn.dataset.tab : 'graphs';
+  const activeTab = UrlState.get().tab || 'graphs';
   if (activeTab === 'details') renderDetails(tracks[id], getGlobalTags());
   if (activeTab === 'insights') renderInsights(tracks[id]);
   if (activeTab === 'combined') renderCombined(tracks[id]);
+  if (activeTab === 'evolution') {
+    renderEvolution(tracks[id], Object.values(tracks), (trackId, range) => {
+      selectTrack(trackId, true);
+      if (range) {
+        ChartView.restoreSelection(range[0], range[1]);
+        onChartRangeChange(range[0], range[1], 'time', true);
+      }
+    });
+  }
 
   // Tell sub-views
   MapView.setSelectedTrack(id, fit);
@@ -1033,6 +1100,83 @@ function updateSearchSortUI() {
   }
 }
 
+function applyState(urlState: AppState) {
+  // Restore track
+  const newTrackId = urlState.track;
+  if (newTrackId !== selectedId) {
+    if (newTrackId && tracks[newTrackId]) {
+      selectTrack(newTrackId, true);
+    } else if (!newTrackId && selectedId) {
+      selectedId = null;
+      ChartView.clear();
+      renderDetails(null, []);
+      renderInsights(null);
+      renderTrackList();
+      MapView.fitAll();
+    }
+  }
+
+  // Restore basemap
+  if (urlState.map && typeof urlState.map === 'string') {
+    MapView.switchBasemap(urlState.map);
+    document
+      .querySelectorAll('.bm-btn')
+      .forEach((b) =>
+        b.classList.toggle('active', (b as HTMLElement).dataset.layer === urlState.map),
+      );
+  }
+
+  // Restore map position
+  if (urlState.map_pos) {
+    const [lat, lng, zoom] = urlState.map_pos;
+    MapView.setPosition(lat, lng, zoom);
+  }
+
+  // Restore tab
+  if (urlState.tab) {
+    document.querySelectorAll('.tab-btn').forEach((btn) => {
+      const b = btn as HTMLElement;
+      if (b.dataset.tab === urlState.tab) {
+        if (!b.classList.contains('active')) b.click();
+      }
+    });
+  }
+
+  // Restore x-axis mode
+  if (urlState.xaxis) {
+    ChartView.setXAxis(urlState.xaxis);
+  }
+  const currentXAxis = urlState.xaxis || 'time';
+  document
+    .querySelectorAll('#x-axis-ctrl .seg-btn')
+    .forEach((b) => b.classList.toggle('active', (b as HTMLElement).dataset.axis === currentXAxis));
+
+  // Restore active metrics
+  if (urlState.metrics) {
+    const metrics = ChartView.METRICS;
+    const keys = urlState.metrics
+      .map((abbr) => Object.keys(metrics).find((k) => metrics[k].abbr === abbr))
+      .filter((k): k is string => k !== undefined);
+    if (keys.length) ChartView.setActiveMetrics(keys);
+  }
+
+  // Restore filters
+  if (urlState.f_date) filters.date = urlState.f_date.map((v) => v || null) as [string | null, string | null];
+  if (urlState.f_dist) filters.dist = urlState.f_dist.map((v) => (v === 0 ? 0 : v || null)) as [number | null, number | null];
+  if (urlState.f_dur) filters.dur = urlState.f_dur.map((v) => (v === 0 ? 0 : v || null)) as [number | null, number | null];
+  if (urlState.f_mets) filters.metrics = new Set(urlState.f_mets);
+  if (urlState.f_tags) filters.tags = urlState.f_tags;
+
+  updateFilterUI();
+
+  if (urlState.q) searchQuery = urlState.q;
+  if (urlState.re) searchRegex = urlState.re;
+  if (urlState.sort) currentSort = urlState.sort;
+  updateSearchSortUI();
+
+  applyFilters();
+}
+
 function updateSportFilterOptions() {
   const container = document.getElementById('sport-filter-container');
   if (!container) return;
@@ -1192,21 +1336,20 @@ function buildTrackItem(track: TrackData) {
   item.innerHTML = `
     <div class="track-color" style="background:${track.color}"></div>
     <div class="track-info">
-      <div class="track-name">${escHtml(track.name)}</div>
-      <div class="track-meta">
-        <span>${date}</span>
-        <span>${(track.stats.totalDist / 1000).toFixed(1)} km</span>
-        ${track.sport ? `<span class="material-symbols-rounded sport-icon" title="${escHtml(track.sport)}">${getSportIcon(track.sport)}</span>` : ''}
-        <span class="badge">${track.format.toUpperCase()}</span>
+      <div class="track-name">${escHtml(track.displayName || track.name)}</div>
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 2px;">
+        <div class="track-meta">
+          <span>${date}</span>
+          <span><span style="display: inline-block; width: 25px; text-align: right;">${Math.round(track.stats.totalDist / 1000)}</span> km</span>
+          ${track.sport ? `<span class="material-symbols-rounded sport-icon" title="${escHtml(track.sport)}">${getSportIcon(track.sport)}</span>` : ''}
+          <span class="badge">${track.format.toUpperCase()}</span>
+        </div>
+        <button class="icon-btn mini toggle-vis" title="Toggle visibility">
+          <span class="material-symbols-rounded">${track.visible ? 'visibility' : 'visibility_off'}</span>
+        </button>
       </div>
       ${tagsHtml}
     </div>
-    <button class="icon-btn mini toggle-vis" title="Toggle visibility">
-      <span class="material-symbols-rounded">${track.visible ? 'visibility' : 'visibility_off'}</span>
-    </button>
-    <button class="icon-btn mini danger delete-track" title="Remove track">
-      <span class="material-symbols-rounded">close</span>
-    </button>
   `;
 
   item.addEventListener('click', (e) => {
@@ -1224,11 +1367,7 @@ function buildTrackItem(track: TrackData) {
     Storage.save(track);
   });
 
-  item.querySelector('.delete-track')?.addEventListener('click', () => {
-    if (confirm(`Remove "${track.name}"?`)) {
-      deleteTrack(track.id);
-    }
-  });
+
 
   return item;
 }
@@ -1246,9 +1385,58 @@ function showToast(msg: string, type: 'info' | 'error' = 'info') {
   }, 3000);
 }
 
+function showSkippedImportsModal() {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  
+  let listHtml = '';
+  skippedImports.forEach(s => {
+    listHtml += `<div style="margin-bottom: 8px;"><strong>${s.name}</strong>: ${s.reason}</div>`;
+  });
+  
+  backdrop.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-title">Skipped Imports</div>
+      <div class="modal-body" style="max-height: 300px; overflow-y: auto;">
+        ${listHtml || '<div>No skipped imports.</div>'}
+      </div>
+      <div class="modal-actions">
+        <button class="modal-btn clear">Clear List</button>
+        <button class="modal-btn cancel">Close</button>
+      </div>
+    </div>
+  `;
+  
+  document.body.appendChild(backdrop);
+  
+  const btnCancel = backdrop.querySelector('.modal-btn.cancel') as HTMLButtonElement;
+  const btnClear = backdrop.querySelector('.modal-btn.clear') as HTMLButtonElement;
+  const close = () => backdrop.remove();
+  
+  btnCancel.addEventListener('click', close);
+  btnClear.addEventListener('click', () => {
+    skippedImports = [];
+    close();
+    const importWarning = document.getElementById('import-warning');
+    if (importWarning) importWarning.classList.add('hidden');
+  });
+  
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) close();
+  });
+}
+
 function initDropZone() {
   const zone = document.getElementById('drop-zone');
   if (!zone) return;
+
+  const importWarning = document.getElementById('import-warning');
+  if (importWarning) {
+    importWarning.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showSkippedImportsModal();
+    });
+  }
 
   window.addEventListener('dragover', (e) => {
     e.preventDefault();
@@ -1306,17 +1494,56 @@ function initDropZone() {
 async function handleFiles(files: File[]) {
   if (!files.length) return;
   cancelProcessing = false;
+  const initialSkipCount = skippedImports.length;
   
   const loader = document.getElementById('global-loader');
   const loaderText = document.getElementById('loader-text');
   const loaderSubtext = document.getElementById('loader-subtext');
   const progressBar = document.getElementById('loader-progress-bar') as HTMLElement;
+  const loaderClose = document.getElementById('loader-close');
+
+  if (loaderClose) {
+    loaderClose.addEventListener('click', () => {
+      cancelProcessing = true;
+      if (loader) loader.classList.add('hidden');
+    });
+  }
+
+  function updateLoaderIconToWarning() {
+    const loaderIcon = document.querySelector('.loader-icon-wrap span') as HTMLElement;
+    if (loaderIcon) {
+      loaderIcon.textContent = 'warning';
+      loaderIcon.style.color = '#f59e0b';
+    }
+    const warningCount = document.getElementById('loader-warning-count');
+    if (warningCount) {
+      const count = skippedImports.length - initialSkipCount;
+      const countSpan = warningCount.querySelector('span');
+      if (countSpan) countSpan.textContent = `${count}`;
+      warningCount.style.display = 'flex';
+    }
+  }
 
   if (loader) {
-    if (loaderText) loaderText.textContent = `Importing ${files.length} file${files.length > 1 ? 's' : ''}...`;
+    if (loaderText) loaderText.textContent = `Importing ${files.length} file${files.length > 1 ? 's' : ''}`;
+    const loaderIcon = document.querySelector('.loader-icon-wrap span') as HTMLElement;
+    if (loaderIcon) {
+      loaderIcon.textContent = 'download';
+      loaderIcon.style.color = 'var(--accent)';
+    }
+    const warningCount = document.getElementById('loader-warning-count');
+    if (warningCount) {
+      warningCount.style.display = 'none';
+      const countSpan = warningCount.querySelector('span');
+      if (countSpan) countSpan.textContent = '0';
+    }
     if (loaderSubtext) loaderSubtext.textContent = '';
     if (progressBar) progressBar.style.width = '0%';
     loader.classList.remove('hidden');
+    
+    if (skippedImports.length > initialSkipCount) {
+      updateLoaderIconToWarning();
+    }
   }
 
   try {
@@ -1330,19 +1557,84 @@ async function handleFiles(files: File[]) {
       return name.endsWith('.gpx') || name.endsWith('.fit') || name.endsWith('.tcx') || name.endsWith('.kml');
     });
 
+    const invalidFiles = files.filter(f => !validFiles.includes(f));
+    invalidFiles.forEach(f => {
+      skippedImports.push({ name: f.name, reason: 'Unsupported file format' });
+    });
+
     if (validFiles.length === 0) {
-      if (files.length > 0) showToast('No valid GPS files found', 'error');
+      if (files.length > 0) {
+        showToast('No valid GPS files found', 'error');
+        // Still update warning icon if there were invalid files!
+        const importWarning = document.getElementById('import-warning');
+        if (importWarning && skippedImports.length > 0) {
+          importWarning.classList.remove('hidden');
+          importWarning.title = `Skipped ${skippedImports.length} imports. Click to view details.`;
+        }
+      }
       return;
     }
 
     for (let i = 0; i < validFiles.length; i++) {
       if (cancelProcessing) break;
       const f = validFiles[i];
-      if (loaderSubtext) loaderSubtext.textContent = f.name;
+      const loaderFilename = document.getElementById('loader-filename');
+      if (loaderFilename) loaderFilename.textContent = f.name;
+      if (loaderSubtext) {
+        loaderSubtext.innerHTML = `<span class="progress-index"></span><span class="progress-total"></span>`;
+        loaderSubtext.querySelector('.progress-index')!.textContent = (i + 1).toString();
+        loaderSubtext.querySelector('.progress-total')!.textContent = validFiles.length.toString();
+      }
       if (progressBar) progressBar.style.width = `${(i / validFiles.length) * 100}%`;
 
       try {
         const data = await Parsers.parseFile(f);
+        
+        // Duplicate checks
+        const existingTracks = Object.values(tracks);
+        
+        // Rule 1: Same file and same size
+        const sameFile = existingTracks.find(t => t.fileName === f.name && t.fileSize === f.size);
+        if (sameFile) {
+          skippedImports.push({ name: f.name, reason: 'Same File' });
+          updateLoaderIconToWarning();
+          continue;
+        }
+        
+        // Rule 2 & 3: Same start day checks
+        const newStart = data.stats.startTime;
+        const newDuration = data.stats.duration;
+        
+        if (newStart != null && newDuration != null) {
+          const newEnd = newStart + newDuration;
+          const sameDayTracks = existingTracks.filter(t => t.stats.startTime != null && isSameDay(newStart, t.stats.startTime!));
+          
+          let discarded = false;
+          for (const ext of sameDayTracks) {
+            const extStart = ext.stats.startTime!;
+            const extDuration = ext.stats.duration!;
+            const extEnd = extStart + extDuration;
+            
+            // Rule 2: Fully contained
+            if (newStart >= extStart && newEnd <= extEnd) {
+              skippedImports.push({ name: f.name, reason: 'Fully contained in another track' });
+              updateLoaderIconToWarning();
+              discarded = true;
+              break;
+            }
+            
+            // Rule 3: Overlaps for > 10 mins
+            const overlap = Math.min(newEnd, extEnd) - Math.max(newStart, extStart);
+            if (overlap > 600000) { // 10 mins in ms
+              skippedImports.push({ name: f.name, reason: 'Overlaps with an existing track for more than 10 mins' });
+              updateLoaderIconToWarning();
+              discarded = true;
+              break;
+            }
+          }
+          if (discarded) continue;
+        }
+
         let id = compactId(data.stats.startTime || Date.now());
         if (tracks[id]) {
           id += '-' + shortRandom();
@@ -1354,15 +1646,32 @@ async function handleFiles(files: File[]) {
           trackName = f.name;
         }
 
+        // Generate a nice display name
+        let displayName = trackName;
+        const t0 = data.points[0]?.time;
+        const sport = data.sport ? data.sport.charAt(0).toUpperCase() + data.sport.slice(1) : 'Activity';
+        if (t0) {
+          const d = new Date(t0);
+          displayName = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${sport}`;
+        } else {
+          displayName = trackName.replace(/\.[^/.]+$/, "").replace(/_/g, ' '); // Remove extension and replace underscores
+        }
+
         const track: TrackData = {
           ...data,
           id,
           name: trackName,
+          displayName,
+          fileName: f.name,
+          fileSize: f.size,
+          bounds: calculateBounds(data.points) || undefined,
+          simplifiedPoints: simplifyTrack(data.points, 50), // 50m resolution
           addedAt: Date.now(),
           visible: true,
           color: TRACK_COLORS[colorIdx % TRACK_COLORS.length],
         };
         colorIdx++;
+        if (cancelProcessing) break;
 
         await Storage.save(track);
         tracks[id] = track;
@@ -1377,7 +1686,19 @@ async function handleFiles(files: File[]) {
           await new Promise(r => setTimeout(r, 0));
         }
       } catch (err) {
-        console.error(`Failed to parse file: ${f.name}`, err);
+        skippedImports.push({ name: f.name, reason: `Parse error: ${err instanceof Error ? err.message : String(err)}` });
+        updateLoaderIconToWarning();
+      }
+    }
+
+    // Update warning icon
+    const importWarning = document.getElementById('import-warning');
+    if (importWarning) {
+      if (skippedImports.length > 0) {
+        importWarning.classList.remove('hidden');
+        importWarning.title = `Skipped ${skippedImports.length} imports. Click to view details.`;
+      } else {
+        importWarning.classList.add('hidden');
       }
     }
 
@@ -1385,6 +1706,14 @@ async function handleFiles(files: File[]) {
       showToast(`Imported ${count} track${count > 1 ? 's' : ''}`);
       applyFilters();
       if (firstId) selectTrack(firstId);
+    }
+
+    const newWarnings = skippedImports.length > initialSkipCount;
+    if (newWarnings) {
+      const loaderIcon = document.querySelector('.loader-icon-wrap span');
+      if (loaderIcon) loaderIcon.textContent = 'warning';
+      // Delay hiding loader to let user see the alert icon
+      await new Promise(r => setTimeout(r, 1500));
     }
   } finally {
     if (loader) loader.classList.add('hidden');

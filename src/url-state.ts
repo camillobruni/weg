@@ -25,6 +25,7 @@ export interface AppState {
   sel?: [number, number];
   sel_point?: number;
   tab?: string;
+  progress?: string;
 }
 
 export const UrlState = (() => {
@@ -32,6 +33,7 @@ export const UrlState = (() => {
   let _state: AppState = {};
   let _lastSearch: string | null = null;
   let _syncTimeout: any = null;
+  let _shouldPush = false;
 
   function read(): AppState {
     const p = new URLSearchParams(location.search);
@@ -42,6 +44,7 @@ export const UrlState = (() => {
     if (p.has('xaxis')) s.xaxis = p.get('xaxis')!;
     if (p.has('tab')) s.tab = p.get('tab')!;
     if (p.has('sel_point')) s.sel_point = Number(p.get('sel_point'));
+    if (p.has('progress')) s.progress = p.get('progress')!;
     const metricsRaw = p.get('metrics');
     if (metricsRaw) s.metrics = metricsRaw.split(',').filter(Boolean);
 
@@ -102,6 +105,7 @@ export const UrlState = (() => {
       if (_state.tab && _state.tab !== 'graphs') p.set('tab', _state.tab);
       if (_state.sel_point !== undefined) p.set('sel_point', String(_state.sel_point));
       if (_state.q) p.set('q', _state.q);
+      if (_state.progress) p.set('progress', _state.progress);
       if (_state.re) p.set('re', '1');
 
       if (_state.sort) {
@@ -149,7 +153,12 @@ export const UrlState = (() => {
 
       if (search !== _lastSearch) {
         const url = location.pathname + (search ? '?' + search : '');
-        history.replaceState(null, '', url);
+        if (_shouldPush) {
+          history.pushState(null, '', url);
+          _shouldPush = false;
+        } else {
+          history.replaceState(null, '', url);
+        }
         _lastSearch = search;
       }
       _syncTimeout = null;
@@ -163,7 +172,8 @@ export const UrlState = (() => {
     return { ..._state };
   }
 
-  function patch(partial: Partial<Record<keyof AppState, any>>) {
+  function patch(partial: Partial<Record<keyof AppState, any>>, push: boolean = false) {
+    if (push) _shouldPush = true;
     for (const [k, v] of Object.entries(partial)) {
       const key = k as keyof AppState;
       if (v === null || v === undefined) {
@@ -175,5 +185,9 @@ export const UrlState = (() => {
     _sync();
   }
 
-  return { get, patch };
+  function refresh() {
+    _state = read();
+  }
+
+  return { get, patch, refresh };
 })();

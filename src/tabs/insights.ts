@@ -12,6 +12,7 @@ import { Zones } from '../zones.ts';
 import { ChartView } from '../charts';
 import { UrlState } from '../url-state';
 import { fmtSecs, escHtml, fmtDuration } from '../utils';
+import { Metrics } from '../metrics';
 
 let toastFn: (msg: string, type?: string) => void = () => {};
 export function initInsights(showToast: (msg: string, type?: string) => void) {
@@ -53,7 +54,7 @@ export function renderInsights(track: TrackData | null) {
       metricKey: 'power',
       label: 'Power Curve',
       unit: 'W',
-      color: '#F7DC6F',
+      color: Metrics.power.color,
       icon: 'bolt',
     });
   }
@@ -66,7 +67,7 @@ export function renderInsights(track: TrackData | null) {
       metricKey: 'hr',
       label: 'Heart Rate Curve',
       unit: 'bpm',
-      color: '#FF6B6B',
+      color: Metrics.hr.color,
       icon: 'favorite',
     });
   }
@@ -75,7 +76,7 @@ export function renderInsights(track: TrackData | null) {
     const card = document.createElement('div');
     card.className = 'insight-card';
     const metricKey = 'power';
-    const color = '#F7DC6F';
+    const color = Metrics.power.color;
     card.style.setProperty('--chart-color', color);
     const isMapColored = ChartView.getMapColorMetric() === metricKey;
 
@@ -93,12 +94,12 @@ export function renderInsights(track: TrackData | null) {
 
       zonesHtml += `
         <div style="margin-bottom:12px">
-          <div style="display:flex; align-items:baseline; font-size:12px; margin-bottom:4px; gap:8px">
+          <div class="font-m" style="display:flex; align-items:baseline; margin-bottom:4px; gap:8px">
             <span style="font-weight:800; color:var(--text); width:20px">Z${i+1}</span>
             <span style="font-weight:600; color:var(--text-muted); flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${z.name}</span>
-            <span style="color:var(--text-dim); width:80px; text-align:right; font-size:11px">${rangeText}</span>
+            <span class="font-s" style="color:var(--text-dim); width:80px; text-align:right">${rangeText}</span>
             <span style="color:var(--text); width:70px; text-align:right; font-variant-numeric: tabular-nums">${fmtSecs(Math.round(time))}</span>
-            <span style="color:var(--text-dim); width:45px; text-align:right; font-variant-numeric: tabular-nums; font-size:11px">${pct.toFixed(1)}%</span>
+            <span class="font-s" style="color:var(--text-dim); width:45px; text-align:right; font-variant-numeric: tabular-nums">${pct.toFixed(1)}%</span>
           </div>
           <div style="height:8px; background:var(--surface); border-radius:4px; overflow:hidden">
             <div style="height:100%; width:${pct}%; background:${z.color}"></div>
@@ -114,11 +115,11 @@ export function renderInsights(track: TrackData | null) {
             <span class="material-symbols-rounded" style="color:${color}">bolt</span>Power Zones
           </div>
           <button class="map-color-btn icon-btn mini ${isMapColored ? 'active' : ''}" data-metric="${metricKey}" title="Color map by this metric">
-            <span class="material-symbols-rounded" style="font-size:16px">colorize</span>
+            <span class="material-symbols-rounded font-l">colorize</span>
           </button>
         </div>
         <button class="icon-btn mini btn-pw-settings" title="Configure FTP">
-          <span class="material-symbols-rounded" style="font-size:16px">settings</span>
+          <span class="material-symbols-rounded font-l">settings</span>
         </button>
       </div>
       <div style="padding: 5px 0">${zonesHtml}</div>
@@ -145,7 +146,7 @@ export function renderInsights(track: TrackData | null) {
     const card = document.createElement('div');
     card.className = 'insight-card';
     const metricKey = 'hr';
-    const color = '#FF6B6B';
+    const color = Metrics.hr.color;
     card.style.setProperty('--chart-color', color);
     const isMapColored = ChartView.getMapColorMetric() === metricKey;
 
@@ -163,12 +164,12 @@ export function renderInsights(track: TrackData | null) {
 
       zonesHtml += `
         <div style="margin-bottom:12px">
-          <div style="display:flex; align-items:baseline; font-size:12px; margin-bottom:4px; gap:8px">
+          <div class="font-m" style="display:flex; align-items:baseline; margin-bottom:4px; gap:8px">
             <span style="font-weight:800; color:var(--text); width:20px">Z${i+1}</span>
             <span style="font-weight:600; color:var(--text-muted); flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${z.name}</span>
-            <span style="color:var(--text-dim); width:95px; text-align:right; font-size:11px">${rangeText}</span>
+            <span class="font-s" style="color:var(--text-dim); width:95px; text-align:right">${rangeText}</span>
             <span style="color:var(--text); width:70px; text-align:right; font-variant-numeric: tabular-nums">${fmtSecs(Math.round(time))}</span>
-            <span style="color:var(--text-dim); width:45px; text-align:right; font-variant-numeric: tabular-nums; font-size:11px">${pct.toFixed(1)}%</span>
+            <span class="font-s" style="color:var(--text-dim); width:45px; text-align:right; font-variant-numeric: tabular-nums">${pct.toFixed(1)}%</span>
           </div>
           <div style="height:8px; background:var(--surface); border-radius:4px; overflow:hidden">
             <div style="height:100%; width:${pct}%; background:${z.color}"></div>
@@ -184,11 +185,11 @@ export function renderInsights(track: TrackData | null) {
             <span class="material-symbols-rounded" style="color:${color}">favorite</span>Heart Rate Zones
           </div>
           <button class="map-color-btn icon-btn mini ${isMapColored ? 'active' : ''}" data-metric="${metricKey}" title="Color map by this metric">
-            <span class="material-symbols-rounded" style="font-size:16px">colorize</span>
+            <span class="material-symbols-rounded font-l">colorize</span>
           </button>
         </div>
         <button class="icon-btn mini btn-hr-settings" title="Configure HR Zones">
-          <span class="material-symbols-rounded" style="font-size:16px">settings</span>
+          <span class="material-symbols-rounded font-l">settings</span>
         </button>
       </div>
       <div style="padding: 5px 0">${zonesHtml}</div>
@@ -218,24 +219,24 @@ export function renderInsights(track: TrackData | null) {
 
   climbingCard.innerHTML = `
     <div class="insight-title">
-      <span class="material-symbols-rounded" style="color:#4ECDC4">terrain</span>Climbing Analysis
+      <span class="material-symbols-rounded" style="color:${Metrics.elevation.color}">terrain</span>Climbing Analysis
     </div>
     <div class="details-grid" style="grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 10px">
       <div class="details-card" style="padding: 12px">
-        <div class="details-card-label" style="font-size:10px">Total Ascent</div>
-        <div class="details-card-value" style="font-size:16px">${Math.round(s.elevGain)} m</div>
+        <div class="details-card-label font-s">Total Ascent</div>
+        <div class="details-card-value font-l">${Math.round(s.elevGain)} m</div>
       </div>
       <div class="details-card" style="padding: 12px">
-        <div class="details-card-label" style="font-size:10px">Total Descent</div>
-        <div class="details-card-value" style="font-size:16px">${Math.round(s.elevLoss)} m</div>
+        <div class="details-card-label font-s">Total Descent</div>
+        <div class="details-card-value font-l">${Math.round(s.elevLoss)} m</div>
       </div>
       <div class="details-card" style="padding: 12px">
-        <div class="details-card-label" style="font-size:10px">Avg Grade</div>
-        <div class="details-card-value" style="font-size:16px">${grade.toFixed(1)} %</div>
+        <div class="details-card-label font-s">Avg Grade</div>
+        <div class="details-card-value font-l">${grade.toFixed(1)} %</div>
       </div>
       <div class="details-card" style="padding: 12px">
-        <div class="details-card-label" style="font-size:10px">VAM</div>
-        <div class="details-card-value" style="font-size:16px">${s.duration && s.duration > 0 ? Math.round((s.elevGain / s.duration) * 3600000) : 0} m/h</div>
+        <div class="details-card-label font-s">VAM</div>
+        <div class="details-card-value font-l">${s.duration && s.duration > 0 ? Math.round((s.elevGain / s.duration) * 3600000) : 0} m/h</div>
       </div>
     </div>
   `;
@@ -252,8 +253,8 @@ export function renderInsights(track: TrackData | null) {
       </div>
       <div class="details-grid" style="grid-template-columns: repeat(1, 1fr); gap: 12px; margin-top: 10px">
         <div class="details-card" style="padding: 12px">
-          <div class="details-card-label" style="font-size:10px">EF (Avg Power / Avg HR)</div>
-          <div class="details-card-value" style="font-size:24px">${ef.toFixed(2)}</div>
+          <div class="details-card-label font-s">EF (Avg Power / Avg HR)</div>
+          <div class="details-card-value font-l">${ef.toFixed(2)}</div>
           <div class="details-subtitle" style="margin-top:4px">Higher values indicate better aerobic fitness.</div>
         </div>
       </div>
@@ -287,11 +288,11 @@ function renderCurveCard(opts: CurveCardOptions) {
           <span class="material-symbols-rounded" style="color:${color}">${icon}</span>${label}
         </div>
         <button class="map-color-btn icon-btn mini ${isMapColored ? 'active' : ''}" data-metric="${metricKey}" title="Color map by this metric">
-          <span class="material-symbols-rounded" style="font-size:16px">colorize</span>
+          <span class="material-symbols-rounded font-l">colorize</span>
         </button>
       </div>
       <button class="icon-btn mini btn-toggle-table" title="Toggle Data Table">
-        <span class="material-symbols-rounded" style="font-size:18px">expand_more</span>
+        <span class="material-symbols-rounded font-l">expand_more</span>
       </button>
     </div>
     <div id="${metricKey}-curve-chart" class="insight-chart-container"></div>
@@ -348,7 +349,7 @@ function renderCurveCard(opts: CurveCardOptions) {
       <td class="power-curve-val">${val} ${unit}</td>
       <td style="text-align:right">
         <button class="icon-btn mini btn-show-peak" title="Highlight on Map" data-idx="${entry.idx}" data-len="${d}">
-          <span class="material-symbols-rounded" style="font-size:14px">visibility</span>
+          <span class="material-symbols-rounded font-l">visibility</span>
         </button>
       </td>
     `;
@@ -409,11 +410,13 @@ function renderCurveCard(opts: CurveCardOptions) {
           show: true,
           values: () => [],
           ticks: { show: false },
+          font: '10px system-ui, sans-serif',
         },
         {
           stroke: '#555564',
           grid: { stroke: '#2e2e34', width: 1 },
           values: (_u, vals) => vals.map((v) => `${v}${unit}`),
+          font: '10px system-ui, sans-serif',
         },
       ],
       cursor: {
@@ -488,7 +491,7 @@ function renderCurveCard(opts: CurveCardOptions) {
 
               const durVal = xData[idx!];
               curYVal.innerHTML = `${fmtDuration(durVal)}: ${yData[idx!]} ${unit}`;
-              curYVal.style.transform = `translate(${cx}px, ${cy}px) translate(6px, -50%)`;
+              curYVal.style.transform = `translate(${cx}px, ${cy}px) translate(15px, 15px)`;
               curYVal.style.display = '';
 
               const pcx = u.valToPos(xData[idx!]!, 'x', true);
@@ -541,7 +544,7 @@ function showHRZoneSettings(anchorEl: HTMLElement, track: TrackData) {
   const zones = Parsers.getHRZones();
 
   popup.innerHTML = `
-    <div style="font-size:12px; font-weight:700; margin-bottom:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px">Configure HR Zones (bpm)</div>
+    <div class="font-m" style="font-weight:700; margin-bottom:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px">Configure HR Zones (bpm)</div>
     <div style="display:flex; flex-direction:column; gap:10px">
       <div class="hr-input-row">
         <span>Z1 / Z2</span>
@@ -618,7 +621,7 @@ function showPowerZoneSettings(anchorEl: HTMLElement, track: TrackData) {
   const ftp = Parsers.getFTP();
 
   popup.innerHTML = `
-    <div style="font-size:12px; font-weight:700; margin-bottom:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px">Configure FTP (Watts)</div>
+    <div class="font-m" style="font-weight:700; margin-bottom:12px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px">Configure FTP (Watts)</div>
     <div style="display:flex; flex-direction:column; gap:10px">
       <div class="hr-input-row">
         <span>Your FTP</span>

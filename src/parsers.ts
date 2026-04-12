@@ -65,6 +65,8 @@ export interface DeviceInfo {
 export interface TrackData {
   id: string;
   name: string;
+  displayName?: string;
+  bounds?: { minLat: number; maxLat: number; minLon: number; maxLon: number };
   fileName?: string;
   fileSize?: number;
   device: string | null;
@@ -73,6 +75,7 @@ export interface TrackData {
   subSport?: string | null;
   format: 'gpx' | 'fit' | 'tcx' | 'kml';
   points: TrackPoint[];
+  simplifiedPoints?: TrackPoint[];
   stats: TrackStats;
   color: string;
   addedAt: number;
@@ -81,20 +84,52 @@ export interface TrackData {
   _filtered?: boolean;
 }
 
-export const Parsers = (() => {
-  // ── Haversine distance (metres) ──────────────────────────────
-  function haversine(lat1: number, lon1: number, lat2: number, lon2: number): number {
-    const R = 6371000;
-    const φ1 = (lat1 * Math.PI) / 180,
-      φ2 = (lat2 * Math.PI) / 180;
-    const Δφ = ((lat2 - lat1) * Math.PI) / 180;
-    const Δλ = ((lon2 - lon1) * Math.PI) / 180;
-    const a =
-      Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-      Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
+export function calculateBounds(pts: TrackPoint[]) {
+  if (!pts.length) return null;
+  let minLat = pts[0].lat;
+  let maxLat = pts[0].lat;
+  let minLon = pts[0].lon;
+  let maxLon = pts[0].lon;
+  for (const p of pts) {
+    if (p.lat < minLat) minLat = p.lat;
+    if (p.lat > maxLat) maxLat = p.lat;
+    if (p.lon < minLon) minLon = p.lon;
+    if (p.lon > maxLon) maxLon = p.lon;
   }
+  return { minLat, maxLat, minLon, maxLon };
+}
+
+// ── Haversine distance (metres) ──────────────────────────────
+export function haversine(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371000;
+  const φ1 = (lat1 * Math.PI) / 180,
+    φ2 = (lat2 * Math.PI) / 180;
+  const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+  const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+export function simplifyTrack(pts: TrackPoint[], minDistanceMeters: number): TrackPoint[] {
+  if (pts.length <= 2) return pts;
+  const result: TrackPoint[] = [pts[0]];
+  let lastPoint = pts[0];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const p = pts[i];
+    const d = haversine(lastPoint.lat, lastPoint.lon, p.lat, p.lon);
+    if (d >= minDistanceMeters) {
+      result.push(p);
+      lastPoint = p;
+    }
+  }
+  result.push(pts[pts.length - 1]); // Always keep the last point
+  return result;
+}
+
+export const Parsers = (() => {
 
   // ── Enrich track with distance & metadata ──────────────────
   function enrichPoints(pts: TrackPoint[]): TrackPoint[] {
