@@ -31,8 +31,9 @@
   --text: #e8e8ec;
   --text-muted: #888896;
   --text-dim: #555564;
-  --accent: #3b82f6;
-  --accent-hover: #60a5fa;
+  --theme-color: #3b82f6;
+  --accent: var(--theme-color);
+  --accent-hover: color-mix(in srgb, var(--theme-color) 80%, white);
   --danger: #ef4444;
   --sidebar-w: 280px;
 
@@ -228,7 +229,7 @@ button {
 }
 #drop-zone.drop-active {
   border-color: var(--accent);
-  background: rgba(59, 130, 246, 0.05);
+  background: color-mix(in srgb, var(--theme-color) 5%, transparent);
 }
 .drop-icon {
   font-size: var(--is-m);
@@ -510,7 +511,7 @@ button {
   background: rgba(255, 255, 255, 0.03);
 }
 .track-item.selected {
-  background: rgba(59, 130, 246, 0.08);
+  background: color-mix(in srgb, var(--theme-color) 8%, transparent);
   border-left-color: var(--accent);
 }
 
@@ -1187,8 +1188,8 @@ body.dragging-sidebar {
 .sel-fill {
   position: absolute;
   top: 0;
-  background: rgba(59, 130, 246, 0.08);
-  border-left: 1px solid rgba(59, 130, 246, 0.3);
+  background: color-mix(in srgb, var(--theme-color) 8%, transparent);
+  border-left: 1px solid color-mix(in srgb, var(--theme-color) 30%, transparent);
   border-right: 1px solid rgba(148, 163, 184, 0.4);
   pointer-events: none;
 }

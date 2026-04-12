@@ -103,10 +103,10 @@ export function renderCombined(track: TrackData | null) {
         </button>
       </div>
       <div class="toggle-group" style="display: flex; align-items: center; background: var(--surface3); border-radius: 4px; padding: 2px; border: 1px solid var(--border); flex-shrink: 0;">
-        <button id="btn-combined-cart" class="sort-select-btn" style="width: 24px; height: 24px; border: none; background: ${!isPolar ? 'var(--surface1)' : 'transparent'}; color: ${!isPolar ? 'var(--text)' : 'var(--text-muted)'}; display: flex; align-items: center; justify-content: center;" title="Cartesian Coordinates">
+        <button id="btn-combined-cart" class="sort-select-btn" style="width: 24px; height: 24px; border: none; background: ${!isPolar ? 'var(--theme-color)' : 'transparent'}; color: ${!isPolar ? 'white' : 'var(--text-muted)'}; display: flex; align-items: center; justify-content: center;" title="Cartesian Coordinates">
           <span class="material-symbols-rounded" style="font-size: 16px;">grid_on</span>
         </button>
-        <button id="btn-combined-polar" class="sort-select-btn" style="width: 24px; height: 24px; border: none; background: ${isPolar ? 'var(--surface1)' : 'transparent'}; color: ${isPolar ? 'var(--text)' : 'var(--text-muted)'}; display: flex; align-items: center; justify-content: center;" title="Polar Coordinates">
+        <button id="btn-combined-polar" class="sort-select-btn" style="width: 24px; height: 24px; border: none; background: ${isPolar ? 'var(--theme-color)' : 'transparent'}; color: ${isPolar ? 'white' : 'var(--text-muted)'}; display: flex; align-items: center; justify-content: center;" title="Polar Coordinates">
           <span class="material-symbols-rounded" style="font-size: 16px;">radar</span>
         </button>
       </div>

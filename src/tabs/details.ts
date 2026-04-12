@@ -7,6 +7,7 @@
 import { TrackData } from '../parsers';
 import { Storage } from '../storage';
 import { fmtSecs, escHtml, fmtDateTime, getTagColor, fmtFileSize } from '../utils';
+import { SPORTS, getSportIcon } from '../sports';
 
 let onTagsChangeCb: () => void = () => {};
 export function initDetails(onTagsChange: () => void) {
@@ -90,7 +91,15 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
           </div>
           <div class="details-card" style="padding: 12px">
             <div class="details-card-label" style="font-size:10px">Sport</div>
-            <div class="details-card-value" style="font-size:16px">${escHtml(track.sport || '—')} ${track.subSport ? `<span style="font-size:12px; color:var(--text-dim)">(${escHtml(track.subSport)})</span>` : ''}</div>
+            <div class="details-card-value" style="font-size:16px; display: flex; align-items: center; gap: 6px;">
+              <span class="material-symbols-rounded" id="sport-icon" style="font-size: 18px; color: var(--text-dim);">${getSportIcon(track.sport)}</span>
+              <select id="sport-select" style="background: transparent; border: none; color: var(--text); font-size: 16px; cursor: pointer; outline: none; -webkit-appearance: none; appearance: none;">
+                ${Object.keys(SPORTS).map(key => `<option value="${key}" ${track.sport?.toLowerCase() === key ? 'selected' : ''}>${SPORTS[key].name}</option>`).join('')}
+                <option value="" ${!track.sport ? 'selected' : ''}>—</option>
+              </select>
+              <span class="material-symbols-rounded" style="font-size: 16px; color: var(--text-dim); pointer-events: none; margin-left: -4px;">expand_more</span>
+              ${track.subSport ? `<span style="font-size:12px; color:var(--text-dim)">(${escHtml(track.subSport)})</span>` : ''}
+            </div>
           </div>
           <div class="details-card" style="padding: 12px">
             <div class="details-card-label" style="font-size:10px">Device / Creator</div>
@@ -340,6 +349,16 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
   addBtn.addEventListener('click', addTag);
   tagInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') addTag();
+  });
+
+  const sportSelect = document.getElementById('sport-select') as HTMLSelectElement;
+  sportSelect?.addEventListener('change', async () => {
+    const newSport = sportSelect.value;
+    track.sport = newSport || undefined;
+    await Storage.save(track);
+    const iconEl = document.getElementById('sport-icon');
+    if (iconEl) iconEl.textContent = getSportIcon(newSport);
+    onTagsChangeCb();
   });
 
   renderTags();
