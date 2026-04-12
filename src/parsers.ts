@@ -65,6 +65,8 @@ export interface DeviceInfo {
 export interface TrackData {
   id: string;
   name: string;
+  displayName?: string;
+  bounds?: { minLat: number; maxLat: number; minLon: number; maxLon: number };
   fileName?: string;
   fileSize?: number;
   device: string | null;
@@ -79,6 +81,21 @@ export interface TrackData {
   visible: boolean;
   tags?: string[];
   _filtered?: boolean;
+}
+
+export function calculateBounds(pts: TrackPoint[]) {
+  if (!pts.length) return null;
+  let minLat = pts[0].lat;
+  let maxLat = pts[0].lat;
+  let minLon = pts[0].lon;
+  let maxLon = pts[0].lon;
+  for (const p of pts) {
+    if (p.lat < minLat) minLat = p.lat;
+    if (p.lat > maxLat) maxLat = p.lat;
+    if (p.lon < minLon) minLon = p.lon;
+    if (p.lon > maxLon) maxLon = p.lon;
+  }
+  return { minLat, maxLat, minLon, maxLon };
 }
 
 export const Parsers = (() => {

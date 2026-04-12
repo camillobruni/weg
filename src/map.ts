@@ -52,7 +52,9 @@ export const MapView = (() => {
   const LAYERS: Record<string, L.TileLayer> = {
     swisstopo: L.tileLayer('https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-farbe/default/current/3857/{z}/{x}/{y}.jpeg', {
       attribution: '&copy; swisstopo',
-      maxZoom: 18,
+      maxZoom: 17,
+      tileSize: 128,
+      zoomOffset: 1,
     }),
     opentopomap: L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenTopoMap contributors',
@@ -286,8 +288,10 @@ export const MapView = (() => {
 
     // Burger menu toggle
     const burgerBtn = document.getElementById('btn-extra-layers');
+    const selectedLabel = document.getElementById('selected-extra-map');
     const menuEl = document.getElementById('extra-layers-menu');
-    burgerBtn?.addEventListener('click', (e) => {
+    
+    const toggleMenu = (e: Event) => {
       e.stopPropagation();
       menuEl?.classList.toggle('hidden');
       if (!menuEl?.classList.contains('hidden')) {
@@ -295,7 +299,10 @@ export const MapView = (() => {
         const searchInput = document.getElementById('extra-layers-search-input') as HTMLInputElement;
         searchInput?.focus();
       }
-    });
+    };
+
+    burgerBtn?.addEventListener('click', toggleMenu);
+    selectedLabel?.addEventListener('click', toggleMenu);
     document.addEventListener('click', () => menuEl?.classList.add('hidden'));
     menuEl?.addEventListener('click', (e) => e.stopPropagation());
 

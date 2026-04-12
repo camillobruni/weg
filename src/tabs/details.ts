@@ -10,8 +10,10 @@ import { fmtSecs, escHtml, fmtDateTime, getTagColor, fmtFileSize } from '../util
 import { SPORTS, getSportIcon } from '../sports';
 
 let onTagsChangeCb: () => void = () => {};
-export function initDetails(onTagsChange: () => void) {
+let onDeleteTrackCb: (id: string) => void = () => {};
+export function initDetails(onTagsChange: () => void, onDeleteTrack: (id: string) => void) {
   onTagsChangeCb = onTagsChange;
+  onDeleteTrackCb = onDeleteTrack;
 }
 
 export function renderDetails(track: TrackData | null, globalTags: string[] = []) {
@@ -28,7 +30,7 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
 
   container.innerHTML = `
     <div id="details-header" style="margin-bottom: 24px;">
-      <div class="details-title" style="font-size: 20px; font-weight: 800; margin-bottom: 4px;">${escHtml(track.name)}</div>
+      <input type="text" id="details-title-input" value="${escHtml(track.displayName || track.name)}" style="font-size: 20px; font-weight: 800; border: none; background: transparent; width: 100%; color: var(--text-color); margin-bottom: 4px; outline: none;" />
     </div>
 
     <div class="insights-grid" id="details-grid">
@@ -91,13 +93,10 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
           </div>
           <div class="details-card" style="padding: 12px">
             <div class="details-card-label" style="font-size:10px">Sport</div>
-            <div class="details-card-value" style="font-size:16px; display: flex; align-items: center; gap: 6px;">
+            <div id="sport-dropdown-trigger" class="details-card-value" style="font-size:16px; display: flex; align-items: center; gap: 6px; cursor: pointer;">
               <span class="material-symbols-rounded" id="sport-icon" style="font-size: 18px; color: var(--text-dim);">${getSportIcon(track.sport)}</span>
-              <select id="sport-select" style="background: transparent; border: none; color: var(--text); font-size: 16px; cursor: pointer; outline: none; -webkit-appearance: none; appearance: none;">
-                ${Object.keys(SPORTS).map(key => `<option value="${key}" ${track.sport?.toLowerCase() === key ? 'selected' : ''}>${SPORTS[key].name}</option>`).join('')}
-                <option value="" ${!track.sport ? 'selected' : ''}>—</option>
-              </select>
-              <span class="material-symbols-rounded" style="font-size: 16px; color: var(--text-dim); pointer-events: none; margin-left: -4px;">expand_more</span>
+              <span id="sport-name">${escHtml(SPORTS[track.sport?.toLowerCase() || '']?.name || '—')}</span>
+              <span class="material-symbols-rounded" style="font-size: 16px; color: var(--text-dim);">expand_more</span>
               ${track.subSport ? `<span style="font-size:12px; color:var(--text-dim)">(${escHtml(track.subSport)})</span>` : ''}
             </div>
           </div>
@@ -282,6 +281,14 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
       </div>`
           : ''
       }
+      <div class="insight-card" style="border: 1px solid var(--border)">
+        <div class="insight-title" style="color: var(--danger)"><span class="material-symbols-rounded">delete</span>Danger Zone</div>
+        <div style="margin-top: 8px">
+          <button id="btn-delete-track" style="display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; background: var(--danger); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
+            <span class="material-symbols-rounded" style="font-size: 18px;">delete</span>Delete Track
+          </button>
+        </div>
+      </div>
     </div>
   `;
 
@@ -351,15 +358,92 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
     if (e.key === 'Enter') addTag();
   });
 
-  const sportSelect = document.getElementById('sport-select') as HTMLSelectElement;
-  sportSelect?.addEventListener('change', async () => {
-    const newSport = sportSelect.value;
-    track.sport = newSport || undefined;
+  const titleInput = container.querySelector('#details-title-input') as HTMLInputElement;
+  titleInput?.addEventListener('change', async () => {
+    const val = titleInput.value.trim();
+    if (!val) return;
+    track.displayName = val;
     await Storage.save(track);
-    const iconEl = document.getElementById('sport-icon');
-    if (iconEl) iconEl.textContent = getSportIcon(newSport);
-    onTagsChangeCb();
+    onTagsChangeCb(); // Refresh track list
   });
 
+  const sportTrigger = document.getElementById('sport-dropdown-trigger');
+  sportTrigger?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showSportMenu(sportTrigger);
+  });
+
+  function showSportMenu(anchorEl: HTMLElement) {
+    if (!track) return;
+    document.querySelectorAll('.metric-menu-popup').forEach((el) => el.remove());
+
+    const popup = document.createElement('div');
+    popup.className = 'metric-menu-popup';
+
+    Object.keys(SPORTS).forEach((key) => {
+      const def = SPORTS[key];
+      const item = document.createElement('div');
+      const isActive = track.sport?.toLowerCase() === key;
+      item.className = `menu-item ${isActive ? 'active' : ''}`;
+      item.innerHTML = `
+        <span class="material-symbols-rounded">${def.icon}</span>
+        <span class="item-label">${def.name}</span>
+        <span class="material-symbols-rounded check">${isActive ? 'check' : ''}</span>
+      `;
+      item.addEventListener('click', async () => {
+        track.sport = key;
+        await Storage.save(track);
+        popup.remove();
+        const iconEl = document.getElementById('sport-icon');
+        if (iconEl) iconEl.textContent = def.icon;
+        const nameEl = document.getElementById('sport-name');
+        if (nameEl) nameEl.textContent = def.name;
+        onTagsChangeCb();
+      });
+      popup.appendChild(item);
+    });
+
+    const clearItem = document.createElement('div');
+    const isClear = !track.sport;
+    clearItem.className = `menu-item ${isClear ? 'active' : ''}`;
+    clearItem.innerHTML = `
+      <span class="material-symbols-rounded">block</span>
+      <span class="item-label">—</span>
+      <span class="material-symbols-rounded check">${isClear ? 'check' : ''}</span>
+    `;
+    clearItem.addEventListener('click', async () => {
+      track.sport = undefined;
+      await Storage.save(track);
+      popup.remove();
+      const iconEl = document.getElementById('sport-icon');
+      if (iconEl) iconEl.textContent = 'question_mark';
+      const nameEl = document.getElementById('sport-name');
+      if (nameEl) nameEl.textContent = '—';
+      onTagsChangeCb();
+    });
+    popup.appendChild(clearItem);
+
+    document.body.appendChild(popup);
+
+    const rect = anchorEl.getBoundingClientRect();
+    popup.style.top = `${rect.bottom + window.scrollY + 4}px`;
+    popup.style.left = `${rect.left + window.scrollX}px`;
+
+    const closeHandler = (e: MouseEvent) => {
+      if (!popup.contains(e.target as Node) && !anchorEl.contains(e.target as Node)) {
+        popup.remove();
+        document.removeEventListener('click', closeHandler);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', closeHandler), 10);
+  }
+
   renderTags();
+
+  const deleteBtn = document.getElementById('btn-delete-track');
+  deleteBtn?.addEventListener('click', () => {
+    if (confirm(`Remove "${track.name}"?`)) {
+      onDeleteTrackCb(track.id);
+    }
+  });
 }

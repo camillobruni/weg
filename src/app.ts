@@ -8,7 +8,7 @@
 
 import { Storage } from './storage';
 import { UrlState } from './url-state';
-import { Parsers, TrackData, TrackPoint } from './parsers';
+import { Parsers, TrackData, TrackPoint, calculateBounds } from './parsers';
 import { MapView } from './map';
 import { ChartView } from './charts';
 import { renderDetails, initDetails } from './tabs/details';
@@ -273,6 +273,11 @@ document.addEventListener('click', (e) => {
 
 // ── Boot ──────────────────────────────────────────────────────────
 async function init() {
+  // Wait for fonts to be loaded with a timeout
+  const fontTimeout = new Promise((resolve) => setTimeout(resolve, 1000));
+  await Promise.race([document.fonts.ready, fontTimeout]);
+  document.body.classList.remove('loading-fonts');
+
   const loader = document.getElementById('global-loader');
   const loaderText = document.getElementById('loader-text');
   const loaderSubtext = document.getElementById('loader-subtext');
@@ -288,10 +293,15 @@ async function init() {
   const urlState = UrlState.get();
 
   initInsights((msg: string, type?: string) => showToast(msg, type === 'error' ? 'error' : 'info'));
-  initDetails(() => {
-    applyFilters();
-    syncFiltersToUrl();
-  });
+  initDetails(
+    () => {
+      applyFilters();
+      syncFiltersToUrl();
+    },
+    (id: string) => {
+      deleteTrack(id);
+    }
+  );
   initCombined();
 
   // Init sub-systems
@@ -400,9 +410,16 @@ async function init() {
 
     if (mapLoaderSpan) mapLoaderSpan.textContent = `Preparing ${saved.length} tracks...`;
 
-    saved.forEach(t => {
+    for (const t of saved) {
+      if (!t.bounds && t.points.length > 0) {
+        const b = calculateBounds(t.points);
+        if (b) {
+          t.bounds = b;
+          await Storage.save(t);
+        }
+      }
       tracks[t.id] = t;
-    });
+    }
     applyFilters();
 
     const restoreId = urlState.track && saved.find(t => t.id === urlState.track) 
@@ -1252,21 +1269,20 @@ function buildTrackItem(track: TrackData) {
   item.innerHTML = `
     <div class="track-color" style="background:${track.color}"></div>
     <div class="track-info">
-      <div class="track-name">${escHtml(track.name)}</div>
-      <div class="track-meta">
-        <span>${date}</span>
-        <span>${(track.stats.totalDist / 1000).toFixed(1)} km</span>
-        ${track.sport ? `<span class="material-symbols-rounded sport-icon" title="${escHtml(track.sport)}">${getSportIcon(track.sport)}</span>` : ''}
-        <span class="badge">${track.format.toUpperCase()}</span>
+      <div class="track-name">${escHtml(track.displayName || track.name)}</div>
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 2px;">
+        <div class="track-meta">
+          <span>${date}</span>
+          <span><span style="display: inline-block; width: 25px; text-align: right;">${Math.round(track.stats.totalDist / 1000)}</span> km</span>
+          ${track.sport ? `<span class="material-symbols-rounded sport-icon" title="${escHtml(track.sport)}">${getSportIcon(track.sport)}</span>` : ''}
+          <span class="badge">${track.format.toUpperCase()}</span>
+        </div>
+        <button class="icon-btn mini toggle-vis" title="Toggle visibility">
+          <span class="material-symbols-rounded">${track.visible ? 'visibility' : 'visibility_off'}</span>
+        </button>
       </div>
       ${tagsHtml}
     </div>
-    <button class="icon-btn mini toggle-vis" title="Toggle visibility">
-      <span class="material-symbols-rounded">${track.visible ? 'visibility' : 'visibility_off'}</span>
-    </button>
-    <button class="icon-btn mini danger delete-track" title="Remove track">
-      <span class="material-symbols-rounded">close</span>
-    </button>
   `;
 
   item.addEventListener('click', (e) => {
@@ -1284,11 +1300,7 @@ function buildTrackItem(track: TrackData) {
     Storage.save(track);
   });
 
-  item.querySelector('.delete-track')?.addEventListener('click', () => {
-    if (confirm(`Remove "${track.name}"?`)) {
-      deleteTrack(track.id);
-    }
-  });
+
 
   return item;
 }
@@ -1398,7 +1410,13 @@ async function handleFiles(files: File[]) {
     for (let i = 0; i < validFiles.length; i++) {
       if (cancelProcessing) break;
       const f = validFiles[i];
-      if (loaderSubtext) loaderSubtext.textContent = f.name;
+      const loaderFilename = document.getElementById('loader-filename');
+      if (loaderFilename) loaderFilename.textContent = f.name;
+      if (loaderSubtext) {
+        loaderSubtext.innerHTML = `<span class="progress-index"></span><span class="progress-total"></span>`;
+        loaderSubtext.querySelector('.progress-index')!.textContent = (i + 1).toString();
+        loaderSubtext.querySelector('.progress-total')!.textContent = validFiles.length.toString();
+      }
       if (progressBar) progressBar.style.width = `${(i / validFiles.length) * 100}%`;
 
       try {
@@ -1414,15 +1432,29 @@ async function handleFiles(files: File[]) {
           trackName = f.name;
         }
 
+        // Generate a nice display name
+        let displayName = trackName;
+        const t0 = data.points[0]?.time;
+        const sport = data.sport ? data.sport.charAt(0).toUpperCase() + data.sport.slice(1) : 'Activity';
+        if (t0) {
+          const d = new Date(t0);
+          displayName = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${sport}`;
+        } else {
+          displayName = trackName.replace(/\.[^/.]+$/, "").replace(/_/g, ' '); // Remove extension and replace underscores
+        }
+
         const track: TrackData = {
           ...data,
           id,
           name: trackName,
+          displayName,
+          bounds: calculateBounds(data.points) || undefined,
           addedAt: Date.now(),
           visible: true,
           color: TRACK_COLORS[colorIdx % TRACK_COLORS.length],
         };
         colorIdx++;
+        if (cancelProcessing) break;
 
         await Storage.save(track);
         tracks[id] = track;
