@@ -24,16 +24,16 @@ export function renderEvolution(currentTrack: TrackData | null, allTracks: Track
     <div id="evolution-toolbar" class="evolution-toolbar">
       <div class="evolution-toolbar-left">
         <div class="metric-pills">
-          <button class="metric-pill active" data-target="distance" style="--pill-color:${Metrics.distance.color}; color:${Metrics.distance.color}">
+          <button class="metric-pill active" data-target="distance" style="--pill-color:${Metrics.distance.color}">
             <span class="material-symbols-rounded">${Metrics.distance.icon}</span>Distance
           </button>
-          <button class="metric-pill active" data-target="elevation" style="--pill-color:${Metrics.elevation.color}; color:${Metrics.elevation.color}">
+          <button class="metric-pill active" data-target="elevation" style="--pill-color:${Metrics.elevation.color}">
             <span class="material-symbols-rounded">${Metrics.elevation.icon}</span>Elevation
           </button>
-          <button class="metric-pill active" data-target="power" style="--pill-color:${Metrics.power.color}; color:${Metrics.power.color}">
+          <button class="metric-pill active" data-target="power" style="--pill-color:${Metrics.power.color}">
             <span class="material-symbols-rounded">${Metrics.power.icon}</span>Power
           </button>
-          <button class="metric-pill active" data-target="hr" style="--pill-color:${Metrics.hr.color}; color:${Metrics.hr.color}">
+          <button class="metric-pill active" data-target="hr" style="--pill-color:${Metrics.hr.color}">
             <span class="material-symbols-rounded">${Metrics.hr.icon}</span>Heart Rate
           </button>
         </div>
@@ -108,12 +108,16 @@ export function renderEvolution(currentTrack: TrackData | null, allTracks: Track
   });
 
   function onPinChange(dur: number | null) {
-    cards.forEach(c => c.updatePin(dur));
+    cards.forEach(c => {
+      if (c && c.updatePin) c.updatePin(dur);
+    });
   }
 
   function onRangeChange(range: string) {
     UrlState.patch({ progress: range === 'all' ? null : range });
-    cards.forEach(c => c.updateRange(range));
+    cards.forEach(c => {
+      if (c && c.updateRange) c.updateRange(range);
+    });
   }
 
   if (allTracks.some(t => t.stats.powerCurve)) {
@@ -151,7 +155,9 @@ export function renderEvolution(currentTrack: TrackData | null, allTracks: Track
   }
 
   // Apply initial range
-  cards.forEach(c => c.updateRange(currentRange));
+  cards.forEach(c => {
+    if (c && c.updateRange) c.updateRange(currentRange);
+  });
 }
 
 interface CurveEvolutionCardOptions {

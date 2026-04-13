@@ -108,7 +108,7 @@ export function renderAccumulatedTable(accumulated: AccumulatedData, isDistance:
         <tr>
           <th>Period</th>
           <th>${isDistance ? 'Distance' : 'Elevation'}</th>
-          <th>${isDistance ? 'Dist/Week' : 'Elev/Week'}</th>
+          <th>${isDistance ? 'Distance/Week' : 'Elevation/Week'}</th>
         </tr>
       </thead>
       <tbody>

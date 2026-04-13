@@ -13,7 +13,8 @@ export interface MetricDefinition {
     pts: TrackPoint[],
     fillNulls: (data: (number | null)[]) => (number | null)[],
   ) => (number | null)[];
-  transform?: (v: number) => number;
+  transform?: (v: number) => number | null;
+  smoothSigma?: number;
 }
 
 export const Metrics = {
@@ -29,6 +30,7 @@ export const Metrics = {
   gearFront: { name: 'Front Gear', color: '#A8C8A0', icon: 'settings_input_component' },
   gears: { name: 'Gears', color: '#FF8C00', icon: 'settings' },
   battery: { name: 'Battery', color: '#45B7D1', icon: 'battery_full' },
+  vam: { name: 'VAM', color: '#FFA07A', icon: 'trending_up' },
 };
 
 export const METRICS: Record<string, MetricDefinition> = {
@@ -52,6 +54,7 @@ export const METRICS: Record<string, MetricDefinition> = {
     fmt: (v) => (v * 3.6).toFixed(1),
     fmtAxis: (v) => (v * 3.6).toFixed(0),
     transform: (v) => v,
+    smoothSigma: 2,
   },
   gradient: {
     label: 'Gradient',
@@ -62,6 +65,7 @@ export const METRICS: Record<string, MetricDefinition> = {
     icon: Metrics.gradient.icon,
     fmt: (v) => v.toFixed(1),
     fmtAxis: (v) => v.toFixed(0),
+    smoothSigma: 2,
   },
   power: {
     label: 'Power',
@@ -102,6 +106,7 @@ export const METRICS: Record<string, MetricDefinition> = {
     icon: Metrics.temperature.icon,
     fmt: (v) => v.toFixed(1),
     fmtAxis: (v) => Math.round(v).toString(),
+    smoothSigma: 80,
   },
   gearRear: {
     label: 'Rear Gear',
@@ -142,5 +147,31 @@ export const METRICS: Record<string, MetricDefinition> = {
     icon: Metrics.battery.icon,
     fmt: (v) => Math.round(v).toString(),
     fmtAxis: (v) => Math.round(v).toString(),
+  },
+  vam: {
+    label: 'VAM',
+    field: 'ele',
+    unit: 'm/h',
+    color: '#FFA07A',
+    abbr: 'vam',
+    icon: 'trending_up',
+    fmt: (v) => Math.round(v).toString(),
+    fmtAxis: (v) => Math.round(v).toString(),
+    smoothSigma: 5,
+    compute: (pts, fillNulls) => {
+      const vam = new Array(pts.length).fill(null);
+      for (let i = 1; i < pts.length; i++) {
+        const p = pts[i];
+        const prev = pts[i - 1];
+        if (p.ele != null && prev.ele != null && p.time != null && prev.time != null) {
+          const de = p.ele - prev.ele;
+          const dt = (p.time - prev.time) / 1000; // in seconds
+          if (dt > 0) {
+            vam[i] = (de / dt) * 3600; // m/h
+          }
+        }
+      }
+      return fillNulls(vam);
+    },
   },
 };

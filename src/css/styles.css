@@ -722,6 +722,11 @@ body.dragging-sidebar {
   position: relative;
   min-height: 100px;
 }
+#map-container.editing-mode {
+  border: 4px solid var(--accent);
+  box-shadow: 0 0 15px var(--accent);
+  z-index: 1000; /* Ensure glow is visible */
+}
 #map {
   width: 100%;
   height: 100%;
@@ -978,6 +983,7 @@ body.dragging-sidebar {
   border-bottom: 1px solid var(--border);
   gap: 4px;
 }
+
 .tab-btn {
   background: transparent;
   border: none;
@@ -1036,6 +1042,9 @@ body.dragging-sidebar {
   border-bottom: 1px solid var(--border);
   background: var(--bg);
   min-height: 40px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
 }
 
 .icon-btn {
@@ -1112,7 +1121,7 @@ body.dragging-sidebar {
 .metric-pill.active {
   background: color-mix(in srgb, var(--pill-color) 15%, var(--surface2));
   border-color: var(--pill-color);
-  color: var(--text);
+  color: var(--pill-color);
 }
 .metric-pill.disabled {
   opacity: 0.3;
@@ -2082,6 +2091,9 @@ body.dragging-sidebar {
   border-bottom: 1px solid var(--border);
   background: var(--bg);
   min-height: 40px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
 }
 
 .evolution-toolbar-left, .evolution-toolbar-right {
@@ -2370,6 +2382,10 @@ body.dragging-sidebar {
 
 .course-track-row:hover {
   background: var(--surface2);
+}
+
+.course-track-row.selected {
+  background: color-mix(in srgb, var(--theme-color) 8%, transparent);
 }
 
 .track-name-cell.clickable {

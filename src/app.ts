@@ -538,8 +538,13 @@ async function init() {
     if (pill) {
       const metric = pill.dataset.metric;
       if (metric) {
-        const targetEl = document.querySelector(`.chart-row[data-metric="${metric}"]`);
-        targetEl?.scrollIntoView({ behavior: 'smooth' });
+        toggleMetric(metric, pill);
+        
+        // Scroll to it if it became active
+        if (ChartView.getActiveMetrics().has(metric)) {
+          const targetEl = document.querySelector(`.chart-row[data-metric="${metric}"]`);
+          targetEl?.scrollIntoView({ behavior: 'smooth' });
+        }
       }
     }
   });
@@ -862,7 +867,8 @@ function onChartClick(pt: TrackPoint, idx: number) {
   }
 }
 
-function selectTrack(id: string, fit = true) {
+
+export function selectTrack(id: string, fit = true) {
   if (!tracks[id]) return;
   if (id === selectedId) {
     if (fit) MapView.fitTrack(id);
@@ -1782,20 +1788,13 @@ function updateToolbarLayout() {
   Array.from(pills.children).forEach((el) => {
     const htmlEl = el as HTMLElement;
     if (htmlEl.id === 'pill-overflow') return;
-    if (!htmlEl.classList.contains('active')) return;
 
-    const isOverflow = htmlEl.classList.contains('overflow-hidden');
-    if (isOverflow) {
-      htmlEl.classList.remove('overflow-hidden');
-    }
-
+    htmlEl.classList.remove('overflow-hidden');
     totalW += htmlEl.offsetWidth + 6;
 
     if (totalW > availableW) {
       hidden = true;
       htmlEl.classList.add('overflow-hidden');
-    } else {
-      htmlEl.classList.remove('overflow-hidden');
     }
   });
 

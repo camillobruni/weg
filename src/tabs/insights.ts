@@ -11,8 +11,10 @@ import { MapView } from '../map';
 import { Zones } from '../zones.ts';
 import { ChartView } from '../charts';
 import { UrlState } from '../url-state';
-import { fmtSecs, escHtml, fmtDuration } from '../utils';
+import { fmtSecs, escHtml, fmtDuration, fmtPace } from '../utils';
 import { Metrics } from '../metrics';
+import { SPORTS } from '../sports';
+import { getCoursesForTrack, selectCourse, findCourseRange, calculateCourseStats, renderCourseTableHeaders, renderCourseTableCells } from './courses';
 
 let toastFn: (msg: string, type?: string) => void = () => {};
 export function initInsights(showToast: (msg: string, type?: string) => void) {
@@ -260,6 +262,78 @@ export function renderInsights(track: TrackData | null) {
       </div>
     `;
     grid.appendChild(effCard);
+  }
+  
+  const trackCourses = getCoursesForTrack(track);
+  if (trackCourses.length > 0) {
+    const coursesCard = document.createElement('div');
+    coursesCard.className = 'insight-card';
+    coursesCard.style.cssText = 'column-span: all; display: block;';
+    
+    coursesCard.innerHTML = `
+      <div class="insight-title"><span class="material-symbols-rounded">route</span>Courses (${trackCourses.length})</div>
+      <div class="course-tracks-table-container" style="margin-top: 8px;">
+        <table class="course-tracks-table" style="width: 100%; border-collapse: collapse;">
+          <thead>
+            <tr>
+              <th>Name</th>
+              ${renderCourseTableHeaders()}
+            </tr>
+          </thead>
+          <tbody>
+            ${trackCourses.map(c => {
+              const range = findCourseRange(track, c.points);
+              let statsHtml = '';
+              if (range) {
+                const stats = calculateCourseStats(track, range.startIdx, range.endIdx);
+                const startTime = track.stats?.startTime || track.points?.[0]?.time;
+                const dateStr = startTime ? new Date(startTime).toLocaleDateString('en-CA') : '-';
+                
+                statsHtml = renderCourseTableCells(stats, track.sport || null, dateStr);
+              } else {
+                statsHtml = `<td colspan="8" class="font-m" style="color:var(--text-dim); text-align:center; padding: 8px;">No continuous segment</td>`;
+              }
+              
+              return `
+                <tr class="course-track-row clickable-course" data-id="${c.id}" style="border-bottom: 1px solid var(--border-dim); cursor: pointer;">
+                  <td class="track-name-cell" style="padding: 8px;">
+                    <div style="display: flex; align-items: center;">
+                      <div style="background:var(--accent); width: 3px; height: 16px; margin-right: 8px; border-radius: 1px; flex-shrink: 0;"></div>
+                      ${escHtml(c.name)}
+                    </div>
+                  </td>
+                  ${statsHtml}
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+    grid.appendChild(coursesCard);
+    
+    coursesCard.querySelectorAll('.clickable-course').forEach(el => {
+      el.addEventListener('click', () => {
+        const courseId = (el as HTMLElement).dataset.id!;
+        selectCourse(courseId, true);
+        UrlState.patch({ tab: 'courses' }, true);
+      });
+      
+      el.addEventListener('mouseenter', () => {
+        const courseId = (el as HTMLElement).dataset.id!;
+        const c = trackCourses.find(course => course.id === courseId);
+        if (c) {
+          const range = findCourseRange(track, c.points);
+          if (range) {
+            MapView.highlightSegment(track.id, track.points, range.startIdx, range.endIdx, false);
+          }
+        }
+      });
+      
+      el.addEventListener('mouseleave', () => {
+        MapView.clearHighlight();
+      });
+    });
   }
 }
 

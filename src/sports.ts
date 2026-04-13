@@ -1,13 +1,15 @@
 export interface SportDefinition {
   name: string;
   icon: string;
+  defaultPreset: 'speed' | 'pace';
+  paceUnit?: 'km' | '100m';
 }
 
 export const SPORTS: Record<string, SportDefinition> = {
-  cycling: { name: 'Cycling', icon: 'directions_bike' },
-  skiing: { name: 'Skiing', icon: 'downhill_skiing' },
-  running: { name: 'Running', icon: 'directions_run' },
-  swimming: { name: 'Swimming', icon: 'pool' },
+  cycling: { name: 'Cycling', icon: 'directions_bike', defaultPreset: 'speed' },
+  skiing: { name: 'Skiing', icon: 'downhill_skiing', defaultPreset: 'speed' },
+  running: { name: 'Running', icon: 'directions_run', defaultPreset: 'pace', paceUnit: 'km' },
+  swimming: { name: 'Swimming', icon: 'pool', defaultPreset: 'pace', paceUnit: '100m' },
 };
 
 export function getSportIcon(sport: string | null | undefined): string {
@@ -15,3 +17,4 @@ export function getSportIcon(sport: string | null | undefined): string {
   const key = sport.toLowerCase();
   return SPORTS[key]?.icon || 'exercise';
 }
+
