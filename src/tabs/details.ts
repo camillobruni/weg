@@ -4,11 +4,22 @@
 
 'use strict';
 
-import { TrackData } from '../parsers';
+import { TrackData, Parsers } from '../parsers';
 import { Storage } from '../storage';
-import { fmtSecs, escHtml, fmtDateTime, getTagColor, fmtFileSize } from '../utils';
+import { fmtSecs, escHtml, fmtDateTime, getTagColor, fmtFileSize, fmtPace } from '../utils';
 import { SPORTS, getSportIcon } from '../sports';
 import { Metrics } from '../metrics';
+import { getCoursesForTrack, selectCourse, findCourseRange, calculateCourseStats } from './courses';
+import { UrlState } from '../url-state';
+
+const SENSOR_ICONS: Record<string, string> = {
+  'Heart Rate': Metrics.hr.icon,
+  'Cadence': Metrics.cadence.icon,
+  'Power': Metrics.power.icon,
+  'Temperature': Metrics.temperature.icon,
+  'Shifting': Metrics.gears.icon,
+  'Battery': Metrics.battery.icon,
+};
 
 let onTagsChangeCb: () => void = () => {};
 let onDeleteTrackCb: (id: string) => void = () => {};
@@ -121,8 +132,10 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
           </div>
           <div class="details-card" style="padding: 12px">
             <div class="details-card-label font-s">Sensors Found</div>
-            <div class="details-card-value font-l" style="margin-top: 4px;">
-              ${s.sensors.length ? s.sensors.join(', ') : 'GPS only'}
+            <div class="details-card-value font-l" style="margin-top: 4px; display: flex; gap: 8px; align-items: center;">
+              ${s.sensors.length 
+                ? s.sensors.map(sensor => `<span class="material-symbols-rounded font-l" title="${escHtml(sensor)}">${SENSOR_ICONS[sensor] || 'sensors'}</span>`).join('') 
+                : '<span class="font-m" style="color:var(--text-dim)">GPS only</span>'}
             </div>
           </div>
         </div>
@@ -238,7 +251,7 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
                 else if (st.includes('bluetooth')) sourceIcon = 'bluetooth';
 
                 let deviceIcon = 'sensors';
-                const nameLower = name.toLowerCase();
+                const nameLower = String(name).toLowerCase();
                 if (nameLower.includes('heartrate') || nameLower.includes('hrm')) deviceIcon = Metrics.hr.icon;
                 else if (nameLower.includes('power')) deviceIcon = Metrics.power.icon;
                 else if (nameLower.includes('speed')) deviceIcon = Metrics.speed.icon;
@@ -282,7 +295,8 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
       </div>`
           : ''
       }
-      <div class="insight-card" style="border: 1px solid var(--border)">
+}
+      <div class="insight-card" style="border: 1px solid var(--border); column-span: all; display: block;">
         <div class="insight-title" style="color: var(--danger)"><span class="material-symbols-rounded">delete</span>Danger Zone</div>
         <div style="margin-top: 8px">
           <button id="btn-delete-track" style="display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; background: var(--danger); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: 600;">
@@ -439,6 +453,8 @@ export function renderDetails(track: TrackData | null, globalTags: string[] = []
   }
 
   renderTags();
+
+
 
   const deleteBtn = document.getElementById('btn-delete-track');
   deleteBtn?.addEventListener('click', () => {

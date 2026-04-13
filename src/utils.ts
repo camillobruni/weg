@@ -50,6 +50,14 @@ export function fmtSecs(s: number): string {
   return h > 0 ? `${h}h ${m}m` : `${m}m ${Math.floor(s % 60)}s`;
 }
 
+export function fmtPace(seconds: number | null): string {
+  if (seconds == null || !isFinite(seconds)) return '--';
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.round(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+
 export function fmtDate(ts: number | string | Date): string {
   const d = new Date(ts);
   if (isNaN(d.getTime())) return 'Unknown date';

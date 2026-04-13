@@ -6,11 +6,14 @@
 
 import uPlot from 'uplot';
 import { TrackPoint, TrackStats, TrackData } from './parsers';
-import { gaussianSmooth, fmtSecs, hexToRgba } from './utils';
+import { gaussianSmooth, fmtSecs, hexToRgba, fmtPace } from './utils';
 import { Zones } from './zones.ts';
 import { METRICS, MetricDefinition } from './metrics';
+import { UrlState } from './url-state';
+import { SPORTS } from './sports';
 
 // Augment uPlot to include our custom property
+
 interface WegPlot extends uPlot {
   _strasse?: {
     selFill: HTMLElement;
@@ -73,7 +76,7 @@ export const ChartView = (() => {
   let scaleSyncing: boolean = false;
   let activeMetrics: Set<string> = new Set(['elevation', 'speed']);
   let availableMetrics: Set<string> = new Set();
-  let smoothedMetrics: Set<string> = new Set(['speed', 'gradient']);
+  let smoothedMetrics: Set<string> = new Set(['speed', 'gradient', 'vam', 'temperature']);
   let metricsIncludingZero: Set<string> = new Set(['power']);
   let xAxis: string = 'time';
   let currentTrack: TrackData | null = null;
@@ -427,10 +430,24 @@ export const ChartView = (() => {
     if (!vals.length) return yData.map(() => '#888896');
     const min = Math.min(...vals),
       max = Math.max(...vals);
+
+    const sport = currentTrack?.sport;
+    const sportDef = sport ? SPORTS[sport.toLowerCase()] : null;
+    const defaultMode = sportDef?.defaultPreset || 'speed';
+    const urlState = UrlState.get();
+    const speedMode = (urlState as any).speed_mode || defaultMode;
+    const paceUnit = sportDef?.paceUnit || 'km';
+
     return yData.map((v) => {
       if (v == null || !isFinite(v)) return '#888896';
       if (key === 'gradient') return gradientColor(v);
-      if (key === 'speed') return speedColor(v);
+      if (key === 'speed') {
+        if (speedMode === 'pace') {
+          const speed = (paceUnit === 'km' ? 1000 : 100) / v;
+          return speedColor(speed);
+        }
+        return speedColor(v);
+      }
       const t = max === min ? 0.5 : Math.max(0, Math.min(1, (v - min) / (max - min)));
       if (t <= 0.25) return lerpHex('#4575b4', '#91bfdb', t / 0.25);
       if (t <= 0.5) return lerpHex('#91bfdb', '#fee090', (t - 0.25) / 0.25);
@@ -499,6 +516,15 @@ export const ChartView = (() => {
     if (!currentTrack) return;
     const pts = currentTrack.points;
     const t0 = pts.find((p) => p.time != null)?.time || 0;
+    const totalDuration = ((pts[pts.length - 1]?.time || 0) - t0) / 1000;
+
+    // If values look like absolute timestamps in ms, convert to seconds from start
+    if (tMin > 1e12) tMin = (tMin - t0) / 1000;
+    if (tMax > 1e12) tMax = (tMax - t0) / 1000;
+
+    // Crop to max limits of the track
+    tMin = Math.max(0, Math.min(tMin, totalDuration));
+    tMax = Math.max(0, Math.min(tMax, totalDuration));
 
     const convert = (tOffset: number) => {
       if (xAxis === 'time') return tOffset;
@@ -585,24 +611,53 @@ export const ChartView = (() => {
         100,
         containerW - ROW_BODY_PADDING - (statsVisible ? HIST_W + HIST_GAP : 0),
       );
+      
+      const sport = currentTrack?.sport;
+      const sportDef = sport ? SPORTS[sport.toLowerCase()] : null;
+      const defaultMode = sportDef?.defaultPreset || 'speed';
+      const urlState = UrlState.get();
+      const speedMode = (urlState as any).speed_mode || defaultMode;
+      const paceUnit = sportDef?.paceUnit || 'km';
+
       available.forEach((key) => {
-        const def = METRICS[key];
+        let def = METRICS[key];
+        
+        let transform = def.transform;
+        let fmt = def.fmt;
+        let fmtAxis = def.fmtAxis;
+        let unit = def.unit;
+        let label = def.label;
+
+        if (key === 'speed' && speedMode === 'pace') {
+          label = 'Pace';
+          unit = `min/${paceUnit}`;
+          fmt = (v) => fmtPace(v);
+          fmtAxis = (v) => fmtPace(v);
+          transform = (v) => {
+            if (v == null || v < 0.1) return null;
+            return (paceUnit === 'km' ? 1000 : 100) / v;
+          };
+          
+          def = { ...def, label, unit, fmt, fmtAxis, transform };
+        }
+
         let yData = def.compute
           ? def.compute(pts, fillNulls)
           : fillNulls(
               pts.map((p) => {
                 const v = p[def.field] as number;
-                return v != null && def.transform ? def.transform(v) : v;
+                return v != null && transform ? transform(v) : v;
               }),
             );
         
         if (smoothedMetrics.has(key)) {
-          yData = gaussianSmooth(yData, 2);
+          yData = gaussianSmooth(yData, def.smoothSigma || 2);
         }
 
         createChart(key, def, xData, yData, w, pts);
       });
     }
+
 
     // Restore zoom if saved
     if (savedRange) {
@@ -636,6 +691,12 @@ export const ChartView = (() => {
     w: number,
     pts: TrackPoint[],
   ) {
+    const sport = currentTrack?.sport;
+    const sportDef = sport ? SPORTS[sport.toLowerCase()] : null;
+    const defaultMode = sportDef?.defaultPreset || 'speed';
+    const urlState = UrlState.get();
+    const speedMode = (urlState as any).speed_mode || defaultMode;
+
     // Gradient data: smooth over a 20 m distance window (±10 m each side)
     const gradData = metricKey === 'elevation' ? smoothGradient(pts, 20) : null;
     const row = document.createElement('div');
@@ -710,6 +771,27 @@ export const ChartView = (() => {
 
     const rightActionsEl = document.createElement('div');
     rightActionsEl.className = 'chart-row-right-actions';
+
+    if (metricKey === 'speed') {
+      const paceToggle = document.createElement('div');
+      paceToggle.className = 'seg-ctrl';
+      paceToggle.innerHTML = `
+        <button class="seg-btn ${speedMode === 'speed' ? 'active' : ''}" data-mode="speed">Speed</button>
+        <button class="seg-btn ${speedMode === 'pace' ? 'active' : ''}" data-mode="pace">Pace</button>
+      `;
+      paceToggle.addEventListener('click', (e) => {
+        const btn = (e.target as HTMLElement).closest('.seg-btn') as HTMLElement;
+        if (!btn) return;
+        const mode = btn.dataset.mode;
+        if (mode === 'speed' || mode === 'pace') {
+          const isDefault = mode === defaultMode;
+          UrlState.patch({ speed_mode: isDefault ? null : mode });
+          render(true);
+        }
+      });
+      rightActionsEl.append(paceToggle);
+    }
+
     if (zeroBtn) rightActionsEl.append(zeroBtn);
 
     header.append(labelEl, actionsEl, statsContainer, rightActionsEl);
@@ -841,7 +923,10 @@ export const ChartView = (() => {
       legend: { show: false },
       scales: {
         x: { time: false, range: (_u: uPlot, mn: number, mx: number) => [mn, mx] },
-        y: { range: () => fixedYRange as [number, number] },
+        y: {
+          range: () => fixedYRange as [number, number],
+          dir: (metricKey === 'speed' && speedMode === 'pace') ? -1 : 1
+        },
       },
       axes: [
         {
@@ -2772,6 +2857,10 @@ export const ChartView = (() => {
         }
 
         const val = def.transform ? def.transform(v) : v;
+        if (val == null) {
+          first = true;
+          continue;
+        }
         const xVal = xAxis === 'distance' ? (p.dist || 0) / 1000 : (p.time! - t0) / 1000;
         
         // Skip if way outside horizontal range

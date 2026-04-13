@@ -678,11 +678,7 @@ export const MapView = (() => {
       }
     });
     
-    if (isHovered) {
-      pl.bringToFront();
-    } else if (selectedId && polylines[selectedId]) {
-      polylines[selectedId].bringToFront();
-    }
+    // Avoid bringToFront as it causes flickering in Leaflet SVG renderer
   }
 
   function setSelectedTrack(id: string | null, _fit = true) {
